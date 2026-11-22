@@ -47,7 +47,7 @@ func listApps(ctx context.Context, s *store.Store, out io.Writer) error {
 
 // updateApps installs the newest release of the given apps, or of every app
 // with an update; it goes on after a failure and names all that failed.
-func updateApps(ctx context.Context, s *store.Store, repos []string, acceptSender bool, out io.Writer) error {
+func updateApps(ctx context.Context, s *store.Store, repos []string, acc store.Accept, acceptSender bool, out io.Writer) error {
 	if len(repos) == 0 {
 		updates, err := s.Updates(ctx)
 		if err != nil {
@@ -64,7 +64,7 @@ func updateApps(ctx context.Context, s *store.Store, repos []string, acceptSende
 	var failed []string
 	allHeld := true
 	for _, r := range repos {
-		if err := install(ctx, s, r, acceptSender, out); err != nil {
+		if err := install(ctx, s, r, acc, acceptSender, out); err != nil {
 			fmt.Fprintf(os.Stderr, "lieferling: %s: %v\n", r, err)
 			failed = append(failed, r)
 			allHeld = allHeld && isHeld(err)
@@ -93,9 +93,10 @@ var isTerminal = func() bool {
 
 // install installs or updates one app, showing the download's progress and
 // the customs report. When only the sender changed it asks on a terminal, or
-// accepts at once with acceptSender.
-func install(ctx context.Context, s *store.Store, repo string, acceptSender bool, out io.Writer) error {
-	st, err := withProgress(out, repo, func(p store.Progress) (store.Status, error) { return s.Install(ctx, repo, p) })
+// accepts at once with acceptSender. acc.Digest stays accepted for the second
+// call.
+func install(ctx context.Context, s *store.Store, repo string, acc store.Accept, acceptSender bool, out io.Writer) error {
+	st, err := withProgress(out, repo, func(p store.Progress) (store.Status, error) { return s.InstallAccepting(ctx, repo, acc, p) })
 	printCustoms(out, st.Customs)
 	if errors.Is(err, verify.ErrAsk) {
 		switch {
@@ -112,7 +113,8 @@ func install(ctx context.Context, s *store.Store, repo string, acceptSender bool
 		if st.Customs != nil && st.Customs.After != nil {
 			fmt.Fprintf(out, "Accepting the new sender %s.\n", st.Customs.After)
 		}
-		st, err = withProgress(out, repo, func(p store.Progress) (store.Status, error) { return s.AcceptSender(ctx, repo, p) })
+		again := store.Accept{Sender: true, Digest: acc.Digest}
+		st, err = withProgress(out, repo, func(p store.Progress) (store.Status, error) { return s.InstallAccepting(ctx, repo, again, p) })
 		printCustoms(out, st.Customs)
 	}
 	if err != nil {
@@ -123,20 +125,33 @@ func install(ctx context.Context, s *store.Store, repo string, acceptSender bool
 }
 
 func withProgress(out io.Writer, repo string, fn func(store.Progress) (store.Status, error)) (store.Status, error) {
+	st, err := fn(progressLine(out, repo))
+	endProgress(out)
+	return st, err
+}
+
+// shown is whether a progress line is open and needs a line break.
+var shown bool
+
+// progressLine prints the download's progress in steps of 5 %.
+func progressLine(out io.Writer, repo string) store.Progress {
 	last := -1
-	st, err := fn(func(_ string, done, total int64) {
+	return func(_ string, done, total int64) {
 		if total <= 0 {
 			return
 		}
 		if pct := int(done * 100 / total); pct/5 != last/5 {
-			last = pct
+			last, shown = pct, true
 			fmt.Fprintf(out, "\rDownloading %s... %3d%%", repo, pct)
 		}
-	})
-	if last >= 0 {
-		fmt.Fprintln(out)
 	}
-	return st, err
+}
+
+func endProgress(out io.Writer) {
+	if shown {
+		fmt.Fprintln(out)
+		shown = false
+	}
 }
 
 // printCustoms prints the report: the summary and one line per check.

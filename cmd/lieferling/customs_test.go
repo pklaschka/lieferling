@@ -47,6 +47,10 @@ func customsStore(t *testing.T, tag *string, digest *string) (*store.Store, *fak
 			fmt.Fprint(w, "bytes of "+*tag)
 			return
 		}
+		if strings.Contains(r.URL.Path, "/attestations/") {
+			http.NotFound(w, r)
+			return
+		}
 		name := "Demo-" + strings.TrimPrefix(*tag, "v") + "-arm64.dmg"
 		json.NewEncoder(w).Encode([]forge.Release{{TagName: *tag, Assets: []forge.Asset{{Name: name, URL: srv.URL + "/download/" + name, Digest: *digest}}}})
 	}))
