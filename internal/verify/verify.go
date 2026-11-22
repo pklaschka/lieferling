@@ -82,7 +82,7 @@ const (
 	Skip Result = "skip" // not checkable: nothing to compare with
 )
 
-// Check IDs. Delivery 3 adds "signature" and "notarization".
+// Check IDs.
 const (
 	CheckForgeDigest = "digest.forge"
 	CheckChecksums   = "digest.checksums"
@@ -90,6 +90,11 @@ const (
 	CheckAttestation = "attestation" // a build attestation (Sigstore) for the file
 	CheckSender      = "sender"
 	CheckPolicy      = "policy" // a requirement of the policy or a pin that nothing met
+	// The code signature and Apple's notarization, as codesign and spctl
+	// report them. Their passes never count towards Cleared: they say what
+	// macOS will think, not that the package is the one expected.
+	CheckSignature    = "signature"
+	CheckNotarization = "notarization"
 )
 
 // Check is one line of the report. ID, Result and Code are stable; Text is
@@ -161,9 +166,12 @@ type Report struct {
 	// Sender is who the package says it comes from, when it could be read.
 	Sender *Sender `json:"sender,omitempty"`
 	// Origin is set when a build attestation was verified.
-	Origin    *Origin   `json:"origin,omitempty"`
-	CheckedAt time.Time `json:"checkedAt"`
-	Summary   string    `json:"summary"` // the collapsed line, filled by Localize, never stored
+	Origin *Origin `json:"origin,omitempty"`
+	// Quarantine is what the installer did with the quarantine flag:
+	// "cleared", "left" or "marked"; "" when nothing was installed.
+	Quarantine string    `json:"quarantine,omitempty"`
+	CheckedAt  time.Time `json:"checkedAt"`
+	Summary    string    `json:"summary"` // the collapsed line, filled by Localize, never stored
 }
 
 // Failed reports whether any check failed.

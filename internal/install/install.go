@@ -39,6 +39,8 @@ type Result struct {
 	Path    string // such as /Applications/Feldspur.app
 	AppName string // such as Feldspur
 	Self    bool   // the running app replaced itself and should restart
+	// Quarantine is what happened to the quarantine flag.
+	Quarantine Quarantine
 }
 
 // Options shared by the installers.
@@ -53,6 +55,10 @@ type Options struct {
 	// "". Installing over it replaces the bundle without quitting first;
 	// the caller then restarts.
 	Self string
+	// MarkNotarized sets the quarantine flag on a notarized app, so that
+	// Gatekeeper checks it at first launch. Off, a notarized app keeps the
+	// attributes it came with (none, for a file Lieferling downloads).
+	MarkNotarized bool
 }
 
 // ErrNotInstalled is returned when asked to open an app that is not there.

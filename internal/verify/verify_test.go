@@ -329,15 +329,26 @@ func TestWording(t *testing.T) {
 		SyncedAccepted(digB, digA),
 	)
 	checks = append(checks, RequireWorkflow(nil, ".github/workflows/release.yml")...)
+	for _, sg := range []Signing{
+		{}, {State: "adhoc"},
+		{State: "valid", Authority: "Developer ID Application: X (ABCDE12345)", Assessed: true, Notarized: true},
+		{State: "valid", Authority: "Developer ID Application: X (ABCDE12345)", Assessed: true, Notarized: true, Stapled: true},
+		{State: "valid", Authority: "Developer ID Application: X (ABCDE12345)", Assessed: true},
+		{State: "valid", Authority: "Developer ID Application: X (ABCDE12345)"},
+		{State: "invalid", Authority: "Developer ID Application: X (ABCDE12345)", Problem: "a sealed resource is missing or invalid"},
+		{State: "valid", Authority: "Developer ID Application: X (ABCDE12345)", Revoked: true},
+	} {
+		checks = append(checks, SigningChecks(sg)...)
+	}
 	_, withPolicy := Decide(Strict, nil)
 	checks = append(checks, withPolicy...)
 
 	seen := map[textKey]bool{}
 	for _, lang := range []Lang{English, German} {
 		for v := range summaries {
-			r := Report{Verdict: v, Version: "1.2.0", Checks: checks, Origin: &o}
+			r := Report{Verdict: v, Version: "1.2.0", Checks: checks, Origin: &o, Quarantine: "marked"}
 			Localize(&r, lang)
-			if r.Summary == "" || strings.Contains(r.Summary, "{") {
+			if r.Summary == "" || strings.Contains(r.Summary, "{") || strings.Contains(strings.ToLower(r.Summary), "apple") {
 				t.Errorf("summary %s in %d: %q", v, lang, r.Summary)
 			}
 			for _, c := range r.Checks {
@@ -345,14 +356,20 @@ func TestWording(t *testing.T) {
 				if c.Text == "" {
 					t.Errorf("no sentence for %s %s %s in %d", c.ID, c.Result, c.Code, lang)
 				}
-				if strings.Contains(c.Text, "{") {
-					t.Errorf("placeholder left: %q", c.Text)
+				if strings.Contains(c.Text, "{") || strings.Contains(c.Text, "  ") || strings.Contains(c.Text+" ", " . ") {
+					t.Errorf("placeholder or gap left: %q", c.Text)
 				}
+				// only the signature and notarization lines may name Apple,
+				// and they say which tool answered
 				l := strings.ToLower(c.Text)
+				apple := c.ID == CheckSignature || c.ID == CheckNotarization
 				for _, w := range []string{"apple", "notar", "gatekeeper"} {
-					if strings.Contains(l, w) {
+					if !apple && strings.Contains(l, w) {
 						t.Errorf("%q mentions %s", c.Text, w)
 					}
+				}
+				if apple && !strings.Contains(l, "codesign") && !strings.Contains(l, "spctl") {
+					t.Errorf("%q does not name the tool that answered", c.Text)
 				}
 			}
 		}
@@ -361,5 +378,39 @@ func TestWording(t *testing.T) {
 		if !seen[k] {
 			t.Errorf("sentence %v is never produced", k)
 		}
+	}
+}
+
+func TestSigningChecks(t *testing.T) {
+	id := "Developer ID Application: X (ABCDE12345)"
+	for _, c := range []struct {
+		name string
+		s    Signing
+		want string // result/code pairs
+	}{
+		{"unsigned", Signing{}, "skip/unsigned skip/unsigned"},
+		{"ad hoc", Signing{State: "adhoc"}, "skip/adhoc skip/unsigned"},
+		{"notarized", Signing{State: "valid", Authority: id, Assessed: true, Notarized: true}, "pass/valid pass/notarized"},
+		{"stapled", Signing{State: "valid", Authority: id, Assessed: true, Notarized: true, Stapled: true}, "pass/valid pass/stapled"},
+		{"not notarized", Signing{State: "valid", Authority: id, Assessed: true}, "pass/valid skip/unnotarized"},
+		{"unassessed", Signing{State: "valid", Authority: id, Notarized: true}, "pass/valid skip/unassessed"},
+		{"invalid", Signing{State: "invalid", Authority: id, Problem: "x"}, "fail/invalid"},
+		{"revoked", Signing{State: "valid", Authority: id, Revoked: true}, "fail/revoked"},
+	} {
+		var got []string
+		for _, ch := range SigningChecks(c.s) {
+			got = append(got, string(ch.Result)+"/"+ch.Code)
+		}
+		if strings.Join(got, " ") != c.want {
+			t.Errorf("%s: %v, want %s", c.name, got, c.want)
+		}
+	}
+	if v, _ := Decide(Standard, SigningChecks(Signing{State: "invalid"})); v != Held {
+		t.Errorf("invalid signature: %s", v)
+	}
+	r := Report{Quarantine: "left", Checks: SigningChecks(Signing{State: "valid", Authority: id, Assessed: true, Notarized: true})}
+	Localize(&r, German)
+	if r.Checks[1].Text != "Apple hat diese App notarisiert (spctl). Lieferling hat ihre Attribute gelassen, wie sie kamen." {
+		t.Errorf("notarized, left: %q", r.Checks[1].Text)
 	}
 }

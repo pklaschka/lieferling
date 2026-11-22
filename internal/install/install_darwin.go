@@ -31,12 +31,64 @@ func (m *mac) Install(ctx context.Context, file, assetName string, inspect Inspe
 		return Result{}, err
 	}
 	defer u.close()
+	q := Cleared
 	if inspect != nil {
-		if err := inspect(ctx, Unpacked{Path: u.source, Name: u.name, Identity: identify(ctx, u.source)}); err != nil {
+		id := assess(ctx, u.source, identify(ctx, u.source))
+		if err := inspect(ctx, Unpacked{Path: u.source, Name: u.name, Identity: id}); err != nil {
 			return Result{}, err
 		}
+		q = QuarantineFor(id, m.o.MarkNotarized)
 	}
-	return m.place(ctx, u)
+	return m.place(ctx, u, q)
+}
+
+// assess fills the signature and notarization fields of id. Each tool gets
+// its own deadline; all three print to stderr.
+func assess(ctx context.Context, app string, id Identity) Identity {
+	out := func(name string, args ...string) (string, error) {
+		c, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		b, err := exec.CommandContext(c, name, args...).CombinedOutput()
+		return string(b), err
+	}
+	info, _ := out("codesign", "-dv", "--verbose=4", app)
+	signed, adhoc, authority := parseSignature(info)
+	switch {
+	case adhoc:
+		id.Signature = AdHoc
+		return id
+	case !signed:
+		id.Signature = Unsigned
+		return id
+	}
+	id.Authority = authority
+	if v, err := out("codesign", "--verify", "--deep", "--strict", "--verbose=2", app); err != nil {
+		id.Signature, id.Problem = Invalid, lastLine(v)
+		return id
+	}
+	id.Signature = Valid
+	if a, err := out("spctl", "--assess", "--type", "execute", "-vv", app); err == nil || a != "" {
+		accepted, source, revoked, usable := parseAssessment(a)
+		id.Source, id.Revoked, id.Assessed = source, revoked, usable
+		id.Notarized = usable && accepted && source == "Notarized Developer ID"
+		if revoked {
+			id.Problem = lastLine(a)
+		}
+	}
+	// stapler needs the command line tools; without them macOS would offer
+	// to install them, so only look for the ticket's file then
+	if exec.CommandContext(ctx, "xcode-select", "-p").Run() == nil {
+		_, err := out("xcrun", "stapler", "validate", app)
+		id.Stapled = err == nil
+	} else {
+		id.Stapled = exists(filepath.Join(app, "Contents", "CodeResources"))
+	}
+	return id
+}
+
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 func (m *mac) Identity(ctx context.Context, path string) Identity {
@@ -123,9 +175,9 @@ func unpack(ctx context.Context, file, assetName string) (u unpacked, err error)
 }
 
 // place puts an unpacked app into the applications folder: it quits the
-// running copy, replaces the old one, clears the quarantine flag and opens
-// the app again if it was running.
-func (m *mac) place(ctx context.Context, u unpacked) (Result, error) {
+// running copy, replaces the old one, clears, leaves or sets the quarantine
+// flag as q says, and opens the app again if it was running.
+func (m *mac) place(ctx context.Context, u unpacked, q Quarantine) (Result, error) {
 	target := filepath.Join(m.o.Dir, u.name+".app")
 	self := SamePath(target, m.o.Self)
 	// An app that was running is opened again afterwards, like an updater
@@ -139,15 +191,22 @@ func (m *mac) place(ctx context.Context, u unpacked) (Result, error) {
 	}
 	// copy next to the old one first, so a failed copy leaves it in place
 	next := target + ".lieferling-new"
-	script := fmt.Sprintf("rm -rf %[1]s && ditto %[2]s %[1]s && xattr -cr %[1]s && rm -rf %[3]s && mv %[1]s %[3]s",
-		shellQuote(next), shellQuote(u.source), shellQuote(target))
+	flag := "xattr -cr " + shellQuote(next) + " && "
+	switch q {
+	case Left:
+		flag = ""
+	case Marked:
+		flag = "xattr -rw com.apple.quarantine " + shellQuote(quarantineValue(time.Now())) + " " + shellQuote(next) + " && "
+	}
+	script := fmt.Sprintf("rm -rf %[1]s && ditto %[2]s %[1]s && %[4]srm -rf %[3]s && mv %[1]s %[3]s",
+		shellQuote(next), shellQuote(u.source), shellQuote(target), flag)
 	if err := m.shell(ctx, script, !writable(m.o.Dir) || (exists(target) && !writable(target))); err != nil {
 		return Result{}, fmt.Errorf("installing into %s: %w", m.o.Dir, err)
 	}
 	if reopen {
 		_ = exec.Command("open", target).Run()
 	}
-	return Result{Path: target, AppName: u.name, Self: self}, nil
+	return Result{Path: target, AppName: u.name, Self: self, Quarantine: q}, nil
 }
 
 func (m *mac) Uninstall(ctx context.Context, path string) error {
