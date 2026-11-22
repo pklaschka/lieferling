@@ -7,8 +7,7 @@ import {rowSection} from "./row";
 
 // The customs note under a parcel ("Zollvermerk"), drawn like the delivery
 // note of #29: one printed line »ZOLL«, the verdict and a tag, unfolding to a
-// box with one line per check: Prüfsumme, Herkunft, Absender (later
-// Apple-Signatur). A held package and a sender change are always open.
+// box with one line per check: Prüfsumme, Herkunft, Absender, Apple-Signatur. A held package and a sender change are always open.
 //
 // The store reports single checks (package verify); this module folds the
 // three digest checks into the one »Prüfsumme« line the user reads.
@@ -21,6 +20,9 @@ interface Line {
   name: string;
   result: Result;
   detail: (string | Node)[]; // text and <code> pieces
+  // reports what macOS says rather than a comparison Lieferling made, so
+  // the tag does not count it (the mockup's »3 von 3« over four lines)
+  uncounted?: boolean;
 }
 
 const icon: Record<Result, string> = {pass: "#i-check", fail: "#i-alert", skip: "#i-more"};
@@ -93,6 +95,7 @@ function fill(el: HTMLElement, app: Status) {
 // The tag after the verdict: how many lines passed, or which one stopped it.
 function showTag(tag: HTMLElement, r: Report, lines: Line[]) {
   const failed = lines.find((l) => l.result === "fail");
+  lines = lines.filter((l) => !l.uncounted);
   const passed = lines.filter((l) => l.result === "pass").length;
   tag.hidden = r.verdict === "exempt";
   if (failed) {
@@ -137,6 +140,8 @@ function linesOf(r: Report, app: Status): Line[] {
   if (origin) lines.push(origin);
   const sender = checks.find((c) => c.id === "sender");
   if (sender) lines.push(senderLine(r, sender, app));
+  const signing = signingLine(r, checks);
+  if (signing) lines.push(signing);
   return lines;
 }
 
@@ -206,6 +211,34 @@ function originLine(r: Report, checks: Check[]): Line | null {
       return {name, result: "skip", detail: ["nicht prüfbar, die Sigstore-Vertrauensanker waren nicht erreichbar"]};
   }
   return null; // none or unsupported: nothing to say, as in the mockup
+}
+
+// »Apple-Signatur«: the code signature and the notarization, folded into one
+// line. What happened to the quarantine flag is said only once the app was
+// placed.
+function signingLine(r: Report, checks: Check[]): Line | null {
+  const sig = checks.find((c) => c.id === "signature");
+  if (!sig) return null;
+  const note = checks.find((c) => c.id === "notarization");
+  const name = "Apple-Signatur";
+  const who = () => r.sender?.teamId ? code(r.sender.teamId) : (sig.got || sig.want || "");
+  const flag = {cleared: "Quarantäne wurde entfernt", left: "Attribute blieben, wie sie kamen", marked: "Quarantäne bleibt, macOS prüft beim ersten Start"}[r.quarantine ?? ""] as string | undefined;
+  const tail = (words: string[]) => {
+    const all = flag ? [...words, flag] : words;
+    return all.length ? [", " + all.join(", ")] : [];
+  };
+  switch (sig.code) {
+    case "invalid":
+      return {name, result: "fail", uncounted: true, detail: ["die Signatur von ", who(), " ist ungültig"]};
+    case "revoked":
+      return {name, result: "fail", uncounted: true, detail: ["Apple hat das Zertifikat von ", who(), " widerrufen"]};
+    case "valid": {
+      const notarized = note?.result === "pass";
+      return {name, result: "pass", uncounted: true,
+        detail: ["signiert von ", who(), ...tail([notarized ? "von Apple notarisiert" : "nicht notarisiert"])]};
+    }
+  }
+  return {name, result: "skip", uncounted: true, detail: ["nicht signiert", ...tail([])]};
 }
 
 function senderLine(r: Report, c: Check, app: Status): Line {
