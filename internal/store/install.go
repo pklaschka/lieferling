@@ -29,7 +29,17 @@ type Progress func(repo string, done, total int64)
 // returned Status carries the report in Customs, and the error wraps
 // verify.ErrHeld or verify.ErrAsk.
 func (s *Store) Install(ctx context.Context, repo string, progress Progress) (Status, error) {
-	return s.install(ctx, repo, progress, nil)
+	return s.InstallAccepting(ctx, repo, Accept{}, progress)
+}
+
+// Accept is what the user agreed to before an install.
+type Accept struct {
+	// Sender accepts the sender change waiting in the held report (as
+	// AcceptSender does).
+	Sender bool
+	// Digest ("sha256:…") installs this package although the synced list
+	// holds another digest for its version. It overrides digest.synced only.
+	Digest string
 }
 
 // AcceptSender installs the package whose sender change is waiting for repo.
@@ -37,33 +47,30 @@ func (s *Store) Install(ctx context.Context, repo string, progress Progress) (St
 // report: if the download or the app inside differs, the result is a new
 // report and nothing is installed.
 func (s *Store) AcceptSender(ctx context.Context, repo string, progress Progress) (Status, error) {
-	repo, err := NormalizeRepo(repo)
-	if err != nil {
-		return Status{}, err
-	}
-	st, err := state.Load(s.StatePath)
-	if err != nil {
-		return Status{}, err
-	}
-	held, ok := st.HeldFor(repo)
-	if !ok || held.Verdict != verify.Ask {
-		return Status{}, fmt.Errorf("%s has no sender change waiting for confirmation", repo)
-	}
-	return s.install(ctx, repo, progress, &held)
+	return s.InstallAccepting(ctx, repo, Accept{Sender: true}, progress)
 }
 
-func (s *Store) install(ctx context.Context, repo string, progress Progress, accepted *verify.Report) (Status, error) {
+// InstallAccepting is Install with what the user accepted.
+func (s *Store) InstallAccepting(ctx context.Context, repo string, a Accept, progress Progress) (Status, error) {
 	repo, err := NormalizeRepo(repo)
 	if err != nil {
 		return Status{}, err
 	}
-	cfg, err := config.Load(s.ConfigPath)
+	acc := accepted{digest: a.Digest}
+	if a.Sender {
+		st, err := state.Load(s.StatePath)
+		if err != nil {
+			return Status{}, err
+		}
+		held, ok := st.HeldFor(repo)
+		if !ok || held.Verdict != verify.Ask {
+			return Status{}, fmt.Errorf("%s has no sender change waiting for confirmation", repo)
+		}
+		acc.sender = &held
+	}
+	app, err := s.appFor(repo)
 	if err != nil {
 		return Status{}, err
-	}
-	app := config.App{Repo: repo, Channel: pick.Stable}
-	if a := cfg.Find(repo); a != nil {
-		app = *a
 	}
 
 	s.mu.Lock()
@@ -73,7 +80,64 @@ func (s *Store) install(ctx context.Context, repo string, progress Progress, acc
 	if err != nil {
 		return Status{}, err
 	}
-	return s.installRelease(ctx, app, rel, asset, progress, accepted)
+	return s.installRelease(ctx, app, rel, asset, progress, acc)
+}
+
+// accepted is Accept resolved: the held report whose sender was accepted.
+type accepted struct {
+	sender *verify.Report
+	digest string
+}
+
+// appFor is the list's entry for repo, or a new one on the stable channel.
+func (s *Store) appFor(repo string) (config.App, error) {
+	cfg, err := config.Load(s.ConfigPath)
+	if err != nil {
+		return config.App{}, err
+	}
+	if a := cfg.Find(repo); a != nil {
+		return *a, nil
+	}
+	return config.App{Repo: repo, Channel: pick.Stable}, nil
+}
+
+// VerifyOptions for Verify.
+type VerifyOptions struct {
+	Strict bool // judge by the strict policy whatever the list says
+}
+
+// Verify downloads the newest package of repo and runs the whole customs
+// check, including unpacking it and reading the sender, and installs nothing.
+// It writes neither state.json nor config.json. The error wraps verify.ErrHeld
+// or verify.ErrAsk when the package would not be installed without a
+// question. The report is in English.
+func (s *Store) Verify(ctx context.Context, repo string, o VerifyOptions, progress Progress) (verify.Report, error) {
+	repo, err := NormalizeRepo(repo)
+	if err != nil {
+		return verify.Report{}, err
+	}
+	app, err := s.appFor(repo)
+	if err != nil {
+		return verify.Report{}, err
+	}
+	force := verify.Policy("")
+	if o.Strict {
+		force = verify.Strict
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rel, asset, err := s.newest(ctx, app)
+	if err != nil {
+		return verify.Report{}, err
+	}
+	rep, _, _, err := s.clear(ctx, &app, rel, asset, progress, accepted{}, force, true)
+	verify.Localize(&rep, verify.English)
+	if errors.Is(err, verify.ErrAsk) || errors.Is(err, verify.ErrHeld) {
+		return rep, heldError(displayName(app), rep)
+	}
+	return rep, err
 }
 
 // newest picks the newest release of the app's channel and its asset for
@@ -94,54 +158,79 @@ func (s *Store) newest(ctx context.Context, app config.App) (forge.Release, forg
 	return rel, asset, nil
 }
 
+func displayName(app config.App) string {
+	if app.AppName != "" {
+		return app.AppName
+	}
+	return app.Repo
+}
+
 // installRelease downloads asset of rel, checks it, installs it and records
 // what was installed. The caller holds s.mu.
-func (s *Store) installRelease(ctx context.Context, app config.App, rel forge.Release, asset forge.Asset, progress Progress, accepted *verify.Report) (Status, error) {
-	file, digest, remove, err := s.download(ctx, app, asset, progress)
+func (s *Store) installRelease(ctx context.Context, app config.App, rel forge.Release, asset forge.Asset, progress Progress, acc accepted) (Status, error) {
+	rep, res, now, err := s.clear(ctx, &app, rel, asset, progress, acc, "", false)
+	if errors.Is(err, verify.ErrAsk) || errors.Is(err, verify.ErrHeld) {
+		return s.held(ctx, app, displayName(app), rep)
+	}
 	if err != nil {
 		return Status{}, err
+	}
+	return s.finish(ctx, app, rel, asset, res, rep, now)
+}
+
+// errVerified ends a dry run's inspect: the package passed, place nothing.
+var errVerified = errors.New("verified, not installed")
+
+// clear downloads asset of rel and takes it through customs. Unless dry, a
+// package that passes is installed. It re-reads the app from the list
+// (another computer may have written digests meanwhile) into *app. The error
+// wraps verify.ErrHeld or verify.ErrAsk for a stopped package; the report
+// says why. force, when set, replaces the policy (lieferling verify --strict).
+func (s *Store) clear(ctx context.Context, app *config.App, rel forge.Release, asset forge.Asset, progress Progress, acc accepted, force verify.Policy, dry bool) (verify.Report, install.Result, verify.Sender, error) {
+	var none install.Result
+	file, digest, remove, err := s.download(ctx, *app, asset, progress)
+	if err != nil {
+		return verify.Report{}, none, verify.Sender{}, err
 	}
 	defer remove()
 
-	// read the list again: another computer may have written digests meanwhile
 	cfg, err := config.Load(s.ConfigPath)
 	if err != nil {
-		return Status{}, err
+		return verify.Report{}, none, verify.Sender{}, err
 	}
 	if a := cfg.Find(app.Repo); a != nil {
-		app = *a
+		*app = *a
 	}
-	version := pick.Version(rel.TagName)
 	rep := verify.Report{
-		Version: version, Asset: asset.Name, Digest: digest,
+		Version: pick.Version(rel.TagName), Asset: asset.Name, Digest: digest,
 		Policy: verify.Resolve(cfg.Verify, app.Verify), CheckedAt: time.Now(),
 	}
-	name := app.AppName
-	if name == "" {
-		name = app.Repo
+	if force != "" {
+		rep.Policy = force
 	}
 
 	if rep.Policy == verify.Off {
 		rep.Verdict = verify.Exempt
-		res, err := s.Installer.Install(ctx, file, asset.Name, nil)
-		if err != nil {
-			return Status{}, err
+		if dry {
+			return rep, none, verify.Sender{}, nil
 		}
-		return s.finish(ctx, app, rel, asset, res, rep, verify.Sender{})
+		res, err := s.Installer.Install(ctx, file, asset.Name, nil)
+		return rep, res, verify.Sender{}, err
 	}
 
-	if accepted != nil && accepted.Digest != digest {
-		accepted = nil // another package than the one the user saw
+	if acc.sender != nil && acc.sender.Digest != digest {
+		acc.sender = nil // another package than the one the user saw
 	}
-	rep.Checks = s.checkDownload(ctx, app, rel, asset, digest)
-	if rep.Failed() {
-		rep.Verdict, rep.Checks = verify.Decide(rep.Policy, rep.Checks)
-		return s.held(ctx, app, name, rep)
+	s.checkDownload(ctx, *app, rel, asset, &rep, acc.digest)
+	// decide before opening the package: a held one is never mounted
+	rep.Verdict, rep.Checks = verify.Decide(rep.Policy, rep.Checks)
+	if rep.Verdict == verify.Held {
+		return rep, none, verify.Sender{}, verify.ErrHeld
 	}
 
 	st, err := state.Load(s.StatePath)
 	if err != nil {
-		return Status{}, err
+		return verify.Report{}, none, verify.Sender{}, err
 	}
 	var now verify.Sender
 	res, err := s.Installer.Install(ctx, file, asset.Name, func(ctx context.Context, u install.Unpacked) error {
@@ -149,28 +238,34 @@ func (s *Store) installRelease(ctx context.Context, app config.App, rel forge.Re
 		if now.BundleID != "" {
 			rep.Sender = &now
 		}
-		known := s.knownSender(ctx, app, st)
-		ok := accepted != nil && accepted.After != nil && accepted.After.Equal(now)
+		known := s.knownSender(ctx, *app, st)
+		ok := acc.sender != nil && acc.sender.After != nil && acc.sender.After.Equal(now)
 		rep.Checks = append(rep.Checks, verify.SenderCheck(known, now, ok))
 		if !known.IsZero() && !known.Equal(now) {
 			rep.Before, rep.After = &known, &now
 		}
 		rep.Verdict, rep.Checks = verify.Decide(rep.Policy, rep.Checks)
-		switch rep.Verdict {
-		case verify.Ask:
+		switch {
+		case rep.Verdict == verify.Ask:
 			return verify.ErrAsk
-		case verify.Held:
+		case rep.Verdict == verify.Held:
 			return verify.ErrHeld
+		case dry:
+			return errVerified
 		}
 		return nil
 	})
-	if errors.Is(err, verify.ErrAsk) || errors.Is(err, verify.ErrHeld) {
-		return s.held(ctx, app, name, rep)
+	switch {
+	case errors.Is(err, errVerified):
+		return rep, none, now, nil
+	case errors.Is(err, verify.ErrAsk):
+		return rep, none, now, verify.ErrAsk
+	case errors.Is(err, verify.ErrHeld):
+		return rep, none, now, verify.ErrHeld
+	case err != nil:
+		return verify.Report{}, none, verify.Sender{}, err
 	}
-	if err != nil {
-		return Status{}, err
-	}
-	return s.finish(ctx, app, rel, asset, res, rep, now)
+	return rep, res, now, nil
 }
 
 // held records a package that was not installed and returns the status that
@@ -260,7 +355,11 @@ func (s *Store) record(app config.App, rel forge.Release, asset forge.Asset, res
 				a.Digests = map[string]string{}
 			}
 			k := verify.Key(rep.Version, rep.Asset)
-			a.Digests[k] = verify.Merge(a.Digests[k], rep.Digest)
+			if syncedAccepted(rep) {
+				a.Digests[k] = rep.Digest // the user settled the dispute for this version
+			} else {
+				a.Digests[k] = verify.Merge(a.Digests[k], rep.Digest)
+			}
 			pruneDigests(a.Digests, keepVersions, k)
 		}
 		return nil

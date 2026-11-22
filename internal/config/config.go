@@ -31,6 +31,10 @@ type App struct {
 	// computer. TeamID is "" for unsigned apps.
 	BundleID string `json:"bundleId,omitempty"`
 	TeamID   string `json:"teamId,omitempty"`
+	// Workflow, when set, is the workflow that must have built this app's
+	// packages (".github/workflows/release.yml"). GitHub only. It makes a
+	// verified build attestation mandatory for this app.
+	Workflow string `json:"workflow,omitempty"`
 	// Digests maps "version/assetName" to "sha256:…" for the last few
 	// versions, so every computer compares with what another one saw. A value
 	// with two digests separated by a space means the computers disagree.
@@ -135,6 +139,9 @@ func merge(dst *Config, other Config) {
 			a.BundleID, a.TeamID = o.BundleID, o.TeamID
 		}
 		a.Verify = verify.Stricter(a.Verify, o.Verify)
+		if a.Workflow == "" {
+			a.Workflow = o.Workflow // a pin never vanishes in a merge
+		}
 		for k, v := range o.Digests {
 			if a.Digests == nil {
 				a.Digests = map[string]string{}

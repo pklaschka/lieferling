@@ -4,16 +4,36 @@
 package store
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 
+	"github.com/pklaschka/lieferling/internal/attest"
 	"github.com/pklaschka/lieferling/internal/config"
 	"github.com/pklaschka/lieferling/internal/forge"
 	"github.com/pklaschka/lieferling/internal/install"
 	"github.com/pklaschka/lieferling/internal/pick"
 	"github.com/pklaschka/lieferling/internal/state"
+	"github.com/pklaschka/lieferling/internal/verify"
 )
+
+// Attester checks build attestations: attest.Verifier in the app, a fake in
+// tests.
+type Attester interface {
+	Verify(ctx context.Context, bundles [][]byte, want attest.Expect) (verify.Origin, error)
+}
+
+// sigstoreDir is where the Sigstore trust roots are cached, next to the icons.
+func sigstoreDir() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "Lieferling", "sigstore")
+}
 
 // Store does the work. Its zero value is not usable; use New.
 type Store struct {
@@ -22,8 +42,10 @@ type Store struct {
 	CacheDir   string // icons; "" keeps nothing between calls
 	Forge      *forge.Client
 	Installer  install.Installer
-	GOOS       string
-	GOARCH     string
+	// Attest checks build attestations; nil counts them as not checkable.
+	Attest Attester
+	GOOS   string
+	GOARCH string
 
 	mu sync.Mutex // serializes installs and state writes
 }
@@ -39,6 +61,7 @@ func New() *Store {
 		CacheDir:   cacheDir(),
 		Forge:      forge.New(),
 		Installer:  install.New(install.DefaultOptions()),
+		Attest:     attest.New(sigstoreDir()),
 		GOOS:       runtime.GOOS,
 		GOARCH:     runtime.GOARCH,
 	}
