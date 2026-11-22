@@ -13,6 +13,12 @@ const names: Record<string, string> = {standard: "Standard", strict: "Streng"};
 
 export function setupPolicy() {
   rowAction("policy", {run: choose});
+  // Enter on a choice takes it; the form's default button would cancel
+  dialog.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !(e.target instanceof HTMLInputElement)) return;
+    e.preventDefault();
+    $<HTMLFormElement>("form", dialog).requestSubmit($<HTMLButtonElement>('button[value="ok"]', dialog));
+  });
 }
 
 async function choose(app: Status) {
@@ -31,7 +37,9 @@ async function choose(app: Status) {
   unmet.hidden = app.forge === "GitHub";
   unmet.textContent = `${app.forge} stellt keine Herkunftsnachweise aus. Streng hält jede Version dieser App an.`;
 
-  if (await ask(dialog) !== "ok") return;
+  const answer = ask(dialog);
+  $<HTMLInputElement>('input[name="policy"]:checked', dialog).focus(); // arrows move from the current choice
+  if (await answer !== "ok") return;
   const chosen = $<HTMLInputElement>('input[name="policy"]:checked', dialog).value;
   if (chosen === current) return;
   try {

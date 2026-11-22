@@ -199,12 +199,12 @@
         <legend class="visually-hidden">Wie streng prüfen?</legend>
         <label class="check choice"><input type="radio" name="policy" value="default"> <span data-label="default"></span></label>
         <label class="check choice"><input type="radio" name="policy" value="standard"> <span><b>Standard:</b> prüfen, was sich prüfen lässt</span></label>
-        <label class="check choice"><input type="radio" name="policy" value="strict"> <span><b>Streng:</b> Prüfsumme und Herkunftsnachweis sind Pflicht</span></label>
+        <label class="check choice"><input type="radio" name="policy" value="strict" aria-describedby="policy-unmet"> <span><b>Streng:</b> Prüfsumme und Herkunftsnachweis sind Pflicht</span></label>
         <p class="choice-note" id="policy-unmet" hidden></p>
         <label class="check choice"><input type="radio" name="policy" value="off"> <span><b>Aus:</b> diese App nicht prüfen</span></label>
       </fieldset>
       <div class="dialog-actions">
-        <button value="cancel" class="button" autofocus>Abbrechen</button>
+        <button value="cancel" class="button">Abbrechen</button>
         <button value="ok" class="button ink">Übernehmen</button>
       </div>
     </form>

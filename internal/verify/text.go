@@ -176,8 +176,8 @@ var sentences = map[textKey]phrase{
 		"Die App trägt eine Signatur von {want}, aber codesign hält sie für ungültig: {got}. Die App wurde nach dem Signieren verändert, oder die Signatur ist beschädigt.",
 	},
 	{CheckSignature, Fail, "revoked"}: {
-		"Apple has revoked the certificate of {got}, with which this app is signed (spctl).",
-		"Apple hat das Zertifikat von {got} widerrufen, mit dem diese App signiert ist (spctl).",
+		"Apple has revoked the certificate of {got}, with which this app is signed (codesign, spctl).",
+		"Apple hat das Zertifikat von {got} widerrufen, mit dem diese App signiert ist (codesign, spctl).",
 	},
 	{CheckSignature, Skip, "unsigned"}: {
 		"The app is not signed (codesign).",
@@ -186,6 +186,14 @@ var sentences = map[textKey]phrase{
 	{CheckSignature, Skip, "adhoc"}: {
 		"The app is signed ad hoc, without a certificate, which names no one (codesign).",
 		"Die App ist ad hoc signiert, ohne Zertifikat, und das nennt niemanden (codesign).",
+	},
+	{CheckSignature, Skip, "untrusted"}: {
+		"The app is signed with a certificate that macOS does not trust, a self-signed one for instance, which names no one (codesign).",
+		"Die App ist mit einem Zertifikat signiert, dem macOS nicht vertraut, etwa einem selbst ausgestellten, und das nennt niemanden (codesign).",
+	},
+	{CheckSignature, Skip, "unassessed"}: {
+		"codesign gave no answer, so Lieferling could not read the signature. When installing, it treats the app as not notarized by Apple and removes the quarantine flag.",
+		"codesign hat nicht geantwortet, Lieferling konnte die Signatur deshalb nicht lesen. Beim Installieren behandelt es die App als nicht von Apple notarisiert und entfernt die Quarantäne.",
 	},
 	{CheckNotarization, Pass, "notarized"}: {
 		"Apple has notarized this app (spctl).{quarantine}",
@@ -200,8 +208,8 @@ var sentences = map[textKey]phrase{
 		"Apple hat diese App nicht notarisiert (spctl). Beim Installieren entfernt Lieferling die Quarantäne, weil macOS sie sonst nicht öffnen würde.",
 	},
 	{CheckNotarization, Skip, "unsigned"}: {
-		"Not signed, so not notarized by Apple (spctl). When installing, Lieferling removes the quarantine flag so that macOS opens the app.",
-		"Nicht signiert, also nicht von Apple notarisiert (spctl). Beim Installieren entfernt Lieferling die Quarantäne, damit macOS die App öffnet.",
+		"Not signed, so not notarized by Apple (codesign). When installing, Lieferling removes the quarantine flag so that macOS opens the app.",
+		"Nicht signiert, also nicht von Apple notarisiert (codesign). Beim Installieren entfernt Lieferling die Quarantäne, damit macOS die App öffnet.",
 	},
 	{CheckNotarization, Skip, "unassessed"}: {
 		"macOS gave no assessment of this app (spctl), so Lieferling treats it as not notarized by Apple and removes the quarantine flag when installing.",

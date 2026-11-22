@@ -330,7 +330,7 @@ func TestWording(t *testing.T) {
 	)
 	checks = append(checks, RequireWorkflow(nil, ".github/workflows/release.yml")...)
 	for _, sg := range []Signing{
-		{}, {State: "adhoc"},
+		{}, {State: "adhoc"}, {State: "untrusted"}, {State: "unknown"},
 		{State: "valid", Authority: "Developer ID Application: X (ABCDE12345)", Assessed: true, Notarized: true},
 		{State: "valid", Authority: "Developer ID Application: X (ABCDE12345)", Assessed: true, Notarized: true, Stapled: true},
 		{State: "valid", Authority: "Developer ID Application: X (ABCDE12345)", Assessed: true},
@@ -390,6 +390,8 @@ func TestSigningChecks(t *testing.T) {
 	}{
 		{"unsigned", Signing{}, "skip/unsigned skip/unsigned"},
 		{"ad hoc", Signing{State: "adhoc"}, "skip/adhoc skip/unsigned"},
+		{"untrusted", Signing{State: "untrusted"}, "skip/untrusted skip/unsigned"},
+		{"codesign silent", Signing{State: "unknown"}, "skip/unassessed"},
 		{"notarized", Signing{State: "valid", Authority: id, Assessed: true, Notarized: true}, "pass/valid pass/notarized"},
 		{"stapled", Signing{State: "valid", Authority: id, Assessed: true, Notarized: true, Stapled: true}, "pass/valid pass/stapled"},
 		{"not notarized", Signing{State: "valid", Authority: id, Assessed: true}, "pass/valid skip/unnotarized"},

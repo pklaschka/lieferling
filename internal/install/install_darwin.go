@@ -43,15 +43,15 @@ func (m *mac) Install(ctx context.Context, file, assetName string, inspect Inspe
 }
 
 // assess fills the signature and notarization fields of id. Each tool gets
-// its own deadline; all three print to stderr.
+// its own deadline; all of them print to stderr. Only a tool that ran and
+// answered gives a verdict: a deadline, a cancelled install or a missing
+// tool leaves the signature Unknown.
 func assess(ctx context.Context, app string, id Identity) Identity {
-	out := func(name string, args ...string) (string, error) {
-		c, cancel := context.WithTimeout(ctx, 60*time.Second)
-		defer cancel()
-		b, err := exec.CommandContext(c, name, args...).CombinedOutput()
-		return string(b), err
+	info, err := probe(ctx, "codesign", "-dv", "--verbose=4", app)
+	if !answered(err, info) {
+		id.Signature = Unknown
+		return id
 	}
-	info, _ := out("codesign", "-dv", "--verbose=4", app)
 	signed, adhoc, authority := parseSignature(info)
 	switch {
 	case adhoc:
@@ -62,12 +62,24 @@ func assess(ctx context.Context, app string, id Identity) Identity {
 		return id
 	}
 	id.Authority = authority
-	if v, err := out("codesign", "--verify", "--deep", "--strict", "--verbose=2", app); err != nil {
+	if v, err := probe(ctx, "codesign", "--verify", "--deep", "--strict", "--verbose=2", app); err != nil {
+		if !answered(err, v) {
+			id.Signature = Unknown
+			return id
+		}
+		switch verifyFailure(v) {
+		case "revoked":
+			id.Signature, id.Revoked, id.Problem = Valid, true, lastLine(v)
+			return id
+		case "untrusted":
+			id.Signature = Untrusted
+			return id
+		}
 		id.Signature, id.Problem = Invalid, lastLine(v)
 		return id
 	}
 	id.Signature = Valid
-	if a, err := out("spctl", "--assess", "--type", "execute", "-vv", app); err == nil || a != "" {
+	if a, err := probe(ctx, "spctl", "--assess", "--type", "execute", "-vv", app); answered(err, a) {
 		accepted, source, revoked, usable := parseAssessment(a)
 		id.Source, id.Revoked, id.Assessed = source, revoked, usable
 		id.Notarized = usable && accepted && source == "Notarized Developer ID"
@@ -75,15 +87,34 @@ func assess(ctx context.Context, app string, id Identity) Identity {
 			id.Problem = lastLine(a)
 		}
 	}
-	// stapler needs the command line tools; without them macOS would offer
-	// to install them, so only look for the ticket's file then
-	if exec.CommandContext(ctx, "xcode-select", "-p").Run() == nil {
-		_, err := out("xcrun", "stapler", "validate", app)
-		id.Stapled = err == nil
-	} else {
-		id.Stapled = exists(filepath.Join(app, "Contents", "CodeResources"))
+	// stapler comes with the command line tools; without them macOS would
+	// offer to install them, so only look for the ticket's file then, and
+	// also when stapler is missing or gives no answer
+	id.Stapled = exists(filepath.Join(app, "Contents", "CodeResources"))
+	if _, err := probe(ctx, "xcode-select", "-p"); err == nil {
+		if out, err := probe(ctx, "xcrun", "stapler", "validate", app); answered(err, out) {
+			id.Stapled = err == nil
+		}
 	}
 	return id
+}
+
+// probe runs a tool with a deadline of its own and returns what it printed.
+func probe(ctx context.Context, name string, args ...string) (string, error) {
+	c, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	b, err := exec.CommandContext(c, name, args...).CombinedOutput()
+	if c.Err() != nil {
+		return string(b), c.Err()
+	}
+	return string(b), err
+}
+
+// answered reports whether a tool ran to its end and said something: it
+// exited normally, or with a status and some output.
+func answered(err error, out string) bool {
+	var exit *exec.ExitError
+	return err == nil || (errors.As(err, &exit) && strings.TrimSpace(out) != "")
 }
 
 func lastLine(s string) string {

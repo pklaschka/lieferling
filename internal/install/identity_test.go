@@ -65,10 +65,24 @@ func TestParseAssessment(t *testing.T) {
 		"revoked":             {"/tmp/A.app: CSSMERR_TP_CERT_REVOKED", false, true, false, ""},
 		"gatekeeper off":      {"/tmp/A.app: accepted\noverride=security disabled", false, false, false, ""},
 		"nothing":             {"", false, false, false, ""},
+		"verdict in a name":   {"/tmp/A.app: rejected\norigin=Developer ID Application: Jane: accepted Ltd (ABCDE12345)", false, false, true, ""},
 	} {
 		accepted, source, revoked, usable := parseAssessment(c.out)
 		if accepted != c.accepted || source != c.source || revoked != c.revoked || usable != c.usable {
 			t.Errorf("%s: %v %q %v %v", name, accepted, source, revoked, usable)
+		}
+	}
+}
+
+func TestVerifyFailure(t *testing.T) {
+	for out, want := range map[string]string{
+		"/tmp/A.app: CSSMERR_TP_CERT_REVOKED":                       "revoked",
+		"/tmp/A.app: CSSMERR_TP_NOT_TRUSTED":                        "untrusted",
+		"/tmp/A.app: a sealed resource is missing or invalid":       "",
+		"/tmp/A.app: code has no resources but signature indicates": "",
+	} {
+		if got := verifyFailure(out); got != want {
+			t.Errorf("%q: %q, want %q", out, got, want)
 		}
 	}
 }

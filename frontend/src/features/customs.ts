@@ -22,7 +22,9 @@ interface Line {
   detail: (string | Node)[]; // text and <code> pieces
   // reports what macOS says rather than a comparison Lieferling made, so
   // the tag does not count it (the mockup's »3 von 3« over four lines)
+  // its dots stay dots when it passes, so the ticks still equal the count
   uncounted?: boolean;
+  tag?: string; // shorter name for the tag when this line stops the package
 }
 
 const icon: Record<Result, string> = {pass: "#i-check", fail: "#i-alert", skip: "#i-more"};
@@ -100,7 +102,7 @@ function showTag(tag: HTMLElement, r: Report, lines: Line[]) {
   tag.hidden = r.verdict === "exempt";
   if (failed) {
     tag.dataset.tone = "stop";
-    tag.textContent = failed.name;
+    tag.textContent = failed.tag ?? failed.name;
     tag.removeAttribute("aria-label");
   } else {
     tag.dataset.tone = passed === lines.length ? "done" : "part";
@@ -229,14 +231,18 @@ function signingLine(r: Report, checks: Check[]): Line | null {
   };
   switch (sig.code) {
     case "invalid":
-      return {name, result: "fail", uncounted: true, detail: ["die Signatur von ", who(), " ist ungültig"]};
+      return {name, result: "fail", uncounted: true, tag: "Signatur", detail: ["die Signatur von ", who(), " ist ungültig"]};
     case "revoked":
-      return {name, result: "fail", uncounted: true, detail: ["Apple hat das Zertifikat von ", who(), " widerrufen"]};
+      return {name, result: "fail", uncounted: true, tag: "Signatur", detail: ["Apple hat das Zertifikat von ", who(), " widerrufen"]};
     case "valid": {
       const notarized = note?.result === "pass";
       return {name, result: "pass", uncounted: true,
         detail: ["signiert von ", who(), ...tail([notarized ? "von Apple notarisiert" : "nicht notarisiert"])]};
     }
+    case "untrusted":
+      return {name, result: "skip", uncounted: true, detail: ["Zertifikat, dem macOS nicht vertraut", ...tail([])]};
+    case "unassessed":
+      return {name, result: "skip", uncounted: true, detail: ["Signatur nicht lesbar", ...tail([])]};
   }
   return {name, result: "skip", uncounted: true, detail: ["nicht signiert", ...tail([])]};
 }
@@ -270,11 +276,14 @@ function senderLine(r: Report, c: Check, app: Status): Line {
 
 function lineElement(l: Line): HTMLLIElement {
   const li = clone<HTMLLIElement>(lineTemplate);
-  li.dataset.result = l.result;
-  $("use", li).setAttribute("href", icon[l.result]);
+  // what macOS reports is shown, not counted: a tick would read as one more
+  // check that agrees
+  const look: Result = l.uncounted && l.result !== "fail" ? "skip" : l.result;
+  li.dataset.result = look;
+  $("use", li).setAttribute("href", icon[look]);
   const name = $(".customs-name", li);
   name.append(l.name);
-  $(".visually-hidden", name).textContent = ` ${said[l.result]}: `;
+  $(".visually-hidden", name).textContent = ` ${l.uncounted && look === "skip" ? "laut macOS" : said[l.result]}: `;
   name.append($(".visually-hidden", name)); // read after the name
   $(".customs-detail", li).append(...l.detail);
   return li;

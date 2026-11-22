@@ -16,6 +16,13 @@ const (
 	AdHoc    Signature = "adhoc"   // signed without a certificate: names no one
 	Valid    Signature = "valid"   // signed with a certificate, and codesign --verify --deep --strict passes
 	Invalid  Signature = "invalid" // signed with a certificate, and verification fails
+
+	// signed with a certificate macOS does not trust (self-signed, say):
+	// it names no one, like ad hoc
+	Untrusted Signature = "untrusted"
+	// codesign gave no answer: it is missing, timed out or the install was
+	// cancelled
+	Unknown Signature = "unknown"
 )
 
 // Identity is what an app bundle says about itself.
@@ -98,6 +105,9 @@ func parseAssessment(out string) (accepted bool, source string, revoked, usable 
 		if strings.HasPrefix(line, "override=") {
 			return false, source, revoked, false
 		}
+		if strings.Contains(line, "=") {
+			continue // origin=…, source=…: a name may hold the words
+		}
 		if i := strings.LastIndex(line, ": "); i >= 0 {
 			switch w := strings.Fields(line[i+2:]); {
 			case len(w) > 0 && w[0] == "accepted":
@@ -108,6 +118,19 @@ func parseAssessment(out string) (accepted bool, source string, revoked, usable 
 		}
 	}
 	return accepted, source, revoked, verdict
+}
+
+// verifyFailure sorts a failed codesign --verify: "revoked" when the
+// certificate was revoked, "untrusted" when it does not lead to a root macOS
+// trusts, else "" (the code or the signature was changed).
+func verifyFailure(out string) string {
+	switch {
+	case strings.Contains(out, "CERT_REVOKED") || strings.Contains(out, "has been revoked"):
+		return "revoked"
+	case strings.Contains(out, "CSSMERR_TP_NOT_TRUSTED"):
+		return "untrusted"
+	}
+	return ""
 }
 
 // quarantineValue is the value of com.apple.quarantine for an app Lieferling
