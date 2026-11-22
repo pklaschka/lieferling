@@ -120,6 +120,8 @@ On a Forgejo or Gitea server (Codeberg too) Lieferling needs a token with read a
 
 A token only ever goes to its own server. Tokens are never synced; set them up on each Mac.
 
+Build attestations of a private repository need a token that may read them: a classic token with `repo`, or a fine-grained token with the repository permission "Attestations: read". Without it the customs note says the attestation could not be read.
+
 ## Command line
 
 ```text
@@ -127,6 +129,9 @@ lieferling list                         apps on the list, installed and newest v
 lieferling add <repo> [--prerelease]    put a repository on the list
 lieferling install <repo>               install (adds it to the list if needed)
 lieferling update [<repo>...]           update the given apps, or every app with an update
+lieferling verify <repo> [--strict]     check the newest package at customs, install nothing
+lieferling policy [<repo>] [standard|strict|off|default] [--workflow <file>]
+                                        show or set the customs policy
 lieferling open <repo>                  start the installed app
 lieferling channel <repo> stable|prerelease
 lieferling remove <repo> [--uninstall]  take it off the list (and off this computer)
@@ -146,7 +151,7 @@ Without the app, download `lieferling-cli-<version>-darwin-<arch>.tar.gz` from t
 
 - **Release:** the newest non-draft release; on the `stable` channel release candidates ("pre-releases") are skipped.
 - **File:** the release asset that fits this Mac. A `.dmg` beats a `.zip`; a file naming this processor (`arm64`, `x64`, …) beats a `universal` one, which beats one naming no processor. On Apple Silicon an Intel-only build is the last resort (it runs through Rosetta). Files naming another system are never picked, and a bare `.zip` only when it names macOS.
-- **Customs:** before anything is replaced, Lieferling checks the package. The SHA-256 of the download is compared with the checksum the forge lists (GitHub does for newer releases), with a checksum file in the same release (`SHA256SUMS`, `checksums.txt`, `<file>.sha256`) and with what your other Macs saw for the same version (kept in the shared list). The app's bundle ID and team ID are compared with the last version. A package that fails is not installed; the row says why, and `lieferling install`/`update` exit with 3. When only the sender changed, the app and the command line ask first (`--accept-sender` answers yes in scripts). The check shows that the download is intact and unchanged, not who built it.
+- **Customs:** before anything is replaced, Lieferling checks the package. The SHA-256 of the download is compared with the checksum the forge lists (GitHub does for newer releases), with a checksum file in the same release (`SHA256SUMS`, `checksums.txt`, `<file>.sha256`) and with what your other Macs saw for the same version (kept in the shared list). The app's bundle ID and team ID are compared with the last version. A package that fails is not installed; the row says why, and `lieferling install`/`update` exit with 3. When only the sender changed, the app and the command line ask first (`--accept-sender` answers yes in scripts). The checksums show that the download is intact and unchanged, not who built it. For that, Lieferling also reads the build attestation GitHub keeps for a release file built by GitHub Actions (`actions/attest-build-provenance`) and checks with Sigstore that it was built in the app's own repository. `lieferling policy strict` makes a checksum and an attestation mandatory for every app; `lieferling policy <repo> standard` exempts one, `--workflow release.yml` requires one workflow. `lieferling verify <repo>` runs the check without installing and exits with 3 when the package would be held. Lieferling's own releases carry attestations.
 - **Install:** like the original script. Quit the running app (it may ask about unsaved work), replace the copy in `/Applications` and clear the quarantine flag. When `/Applications` is not writable, Lieferling asks for an administrator password.
 
 If two Macs change the list at the same time, iCloud keeps both files ("config 2.json"); Lieferling merges them the next time it writes. An app removed on one Mac can come back that way, so remove it again.
@@ -183,6 +188,8 @@ With squash merges the PR title is the commit message, so put the marker there.
 | `internal/config` | the synced list (iCloud Drive) |
 | `internal/state` | what is installed on this computer |
 | `internal/install` | putting an app in place (macOS so far) |
+| `internal/verify` | the customs check: policy, checks, verdicts and their wording |
+| `internal/attest` | build attestations checked with Sigstore (the only user of sigstore-go) |
 | `internal/store` | the core both front ends use |
 | `internal/catalog` | catalog files: reading, writing, loading from a URL |
 | `internal/deeplink` | `lieferling://` links |

@@ -7,7 +7,7 @@ import {rowSection} from "./row";
 
 // The customs note under a parcel ("Zollvermerk"), drawn like the delivery
 // note of #29: one printed line »ZOLL«, the verdict and a tag, unfolding to a
-// box with one line per check: Prüfsumme, Absender (later Herkunft and
+// box with one line per check: Prüfsumme, Herkunft, Absender (later
 // Apple-Signatur). A held package and a sender change are always open.
 //
 // The store reports single checks (package verify); this module folds the
@@ -133,6 +133,8 @@ function linesOf(r: Report, app: Status): Line[] {
   }
   const checks = r.checks ?? [];
   const lines: Line[] = [checksumLine(r, checks)];
+  const origin = originLine(r, checks);
+  if (origin) lines.push(origin);
   const sender = checks.find((c) => c.id === "sender");
   if (sender) lines.push(senderLine(r, sender, app));
   return lines;
@@ -141,7 +143,8 @@ function linesOf(r: Report, app: Status): Line[] {
 function checksumLine(r: Report, checks: Check[]): Line {
   const name = "Prüfsumme";
   const by = (id: string) => checks.find((c) => c.id === id);
-  const forge = by("digest.forge"), file = by("digest.checksums"), synced = by("digest.synced"), policy = by("policy");
+  const forge = by("digest.forge"), file = by("digest.checksums"), synced = by("digest.synced");
+  const policy = checks.find((c) => c.id === "policy" && c.code === "checksum_required");
   if (forge?.result === "fail") {
     return {name, result: "fail", detail: [digest(r.digest), ` weicht ab von ${forge.source}, dort steht `, digest(forge.want)]};
   }
@@ -161,9 +164,48 @@ function checksumLine(r: Report, checks: Check[]): Line {
   const matched: (string | Node)[][] = [];
   if (forge?.result === "pass") matched.push([forge.source ?? ""]);
   if (file?.result === "pass") matched.push([code(file.source!)]);
-  if (synced?.result === "pass") matched.push(["deiner Liste"]);
+  if (synced?.result === "pass" && synced.code !== "accepted") matched.push(["deiner Liste"]);
   if (matched.length) return {name, result: "pass", detail: [digest(r.digest), " stimmt mit ", ...list(matched)]};
+  if (synced?.code === "accepted") {
+    return {name, result: "pass", detail: [digest(r.digest), " von dir angenommen, ein anderer Mac hat ein anderes Paket gesehen"]};
+  }
   return {name, result: "skip", detail: [digest(r.digest), ", nichts zum Vergleichen: keine veröffentlichte Prüfsumme, und keiner deiner Macs hat diese Version geladen"]};
+}
+
+// »Herkunft«: the build attestation. Like the mockup, the line is left out
+// when the forge simply has none, so most apps keep two lines; it shows
+// whenever an attestation was checked, could not be checked, or was required.
+function originLine(r: Report, checks: Check[]): Line | null {
+  const name = "Herkunft";
+  const c = checks.find((x) => x.id === "attestation");
+  const required = checks.find((x) => x.id === "policy" && (x.code === "attestation_required" || x.code === "workflow_required"));
+  const file = (path: string | undefined) => code((path ?? "").split("/").pop() ?? "");
+  if (c?.result === "pass" && r.origin) {
+    const o = r.origin;
+    const ref = o.ref.replace(/^refs\/(heads|tags)\//, "");
+    return {name, result: "pass", detail: ["gebaut von ", file(o.workflow), " aus ", code(ref), " ", code(`@ ${o.commit.slice(0, 7)}`)]};
+  }
+  if (c?.result === "fail") {
+    switch (c.code) {
+      case "repository":
+        return {name, result: "fail", detail: ["gebaut in ", code(c.got ?? ""), ", erwartet ", code(c.want ?? "")]};
+      case "workflow":
+        return {name, result: "fail", detail: ["gebaut von ", file(c.got), ", verlangt ist ", file(c.want)]};
+    }
+    return {name, result: "fail", detail: ["die Signatur des Herkunftsnachweises ließ sich nicht bestätigen"]};
+  }
+  if (required) {
+    return {name, result: "fail", detail: required.code === "workflow_required" ?
+      ["kein bestätigter Herkunftsnachweis, verlangt ist ", file(required.want)] :
+      ["kein bestätigter Herkunftsnachweis, die strenge Kontrolle verlangt einen"]};
+  }
+  switch (c?.code) {
+    case "unreadable":
+      return {name, result: "skip", detail: [`${c.source} hat den Herkunftsnachweis nicht herausgegeben`]};
+    case "trust":
+      return {name, result: "skip", detail: ["nicht prüfbar, die Sigstore-Vertrauensanker waren nicht erreichbar"]};
+  }
+  return null; // none or unsupported: nothing to say, as in the mockup
 }
 
 function senderLine(r: Report, c: Check, app: Status): Line {
