@@ -167,6 +167,54 @@ var sentences = map[textKey]phrase{
 		"You require builds from {want} for this app, and no build attestation could be confirmed.",
 		"Du verlangst für diese App Builds aus {want}, und es ließ sich kein Herkunftsnachweis bestätigen.",
 	},
+	{CheckSignature, Pass, "valid"}: {
+		"Signed by {got}, and the signature is intact (codesign).",
+		"Signiert von {got}, und die Signatur ist unversehrt (codesign).",
+	},
+	{CheckSignature, Fail, "invalid"}: {
+		"The app carries a signature by {want}, but codesign finds it invalid: {got}. The app was changed after signing, or the signature is damaged.",
+		"Die App trägt eine Signatur von {want}, aber codesign hält sie für ungültig: {got}. Die App wurde nach dem Signieren verändert, oder die Signatur ist beschädigt.",
+	},
+	{CheckSignature, Fail, "revoked"}: {
+		"Apple has revoked the certificate of {got}, with which this app is signed (codesign, spctl).",
+		"Apple hat das Zertifikat von {got} widerrufen, mit dem diese App signiert ist (codesign, spctl).",
+	},
+	{CheckSignature, Skip, "unsigned"}: {
+		"The app is not signed (codesign).",
+		"Die App ist nicht signiert (codesign).",
+	},
+	{CheckSignature, Skip, "adhoc"}: {
+		"The app is signed ad hoc, without a certificate, which names no one (codesign).",
+		"Die App ist ad hoc signiert, ohne Zertifikat, und das nennt niemanden (codesign).",
+	},
+	{CheckSignature, Skip, "untrusted"}: {
+		"The app is signed with a certificate that macOS does not trust, a self-signed one for instance, which names no one (codesign).",
+		"Die App ist mit einem Zertifikat signiert, dem macOS nicht vertraut, etwa einem selbst ausgestellten, und das nennt niemanden (codesign).",
+	},
+	{CheckSignature, Skip, "unassessed"}: {
+		"codesign gave no answer, so Lieferling could not read the signature. When installing, it treats the app as not notarized by Apple and removes the quarantine flag.",
+		"codesign hat nicht geantwortet, Lieferling konnte die Signatur deshalb nicht lesen. Beim Installieren behandelt es die App als nicht von Apple notarisiert und entfernt die Quarantäne.",
+	},
+	{CheckNotarization, Pass, "notarized"}: {
+		"Apple has notarized this app (spctl).{quarantine}",
+		"Apple hat diese App notarisiert (spctl).{quarantine}",
+	},
+	{CheckNotarization, Pass, "stapled"}: {
+		"Apple has notarized this app, and the ticket is attached to it (spctl, stapler).{quarantine}",
+		"Apple hat diese App notarisiert, und das Ticket hängt an (spctl, stapler).{quarantine}",
+	},
+	{CheckNotarization, Skip, "unnotarized"}: {
+		"Apple has not notarized this app (spctl). When installing, Lieferling removes the quarantine flag, because macOS would refuse to open it otherwise.",
+		"Apple hat diese App nicht notarisiert (spctl). Beim Installieren entfernt Lieferling die Quarantäne, weil macOS sie sonst nicht öffnen würde.",
+	},
+	{CheckNotarization, Skip, "unsigned"}: {
+		"Not signed, so not notarized by Apple (codesign). When installing, Lieferling removes the quarantine flag so that macOS opens the app.",
+		"Nicht signiert, also nicht von Apple notarisiert (codesign). Beim Installieren entfernt Lieferling die Quarantäne, damit macOS die App öffnet.",
+	},
+	{CheckNotarization, Skip, "unassessed"}: {
+		"macOS gave no assessment of this app (spctl), so Lieferling treats it as not notarized by Apple and removes the quarantine flag when installing.",
+		"macOS hat diese App nicht bewertet (spctl), Lieferling behandelt sie deshalb als nicht von Apple notarisiert und entfernt beim Installieren die Quarantäne.",
+	},
 	{CheckPolicy, Fail, "checksum_required"}: {
 		"The strict policy requires a published checksum and the release has none.",
 		"Die strenge Kontrolle verlangt eine veröffentlichte Prüfsumme, das Release hat keine.",
@@ -181,11 +229,18 @@ func Localize(r *Report, lang Lang) {
 	}
 	r.Summary = strings.ReplaceAll(summaries[r.Verdict].in(lang), "{version}", r.Version)
 	for i := range r.Checks {
-		r.Checks[i].Text = sentence(r.Checks[i], r.Origin, lang)
+		r.Checks[i].Text = sentence(r.Checks[i], r, lang)
 	}
 }
 
-func sentence(c Check, o *Origin, lang Lang) string {
+// quarantineClauses end the notarization sentence once the app was placed.
+var quarantineClauses = map[string]phrase{
+	"left":   {" Lieferling left its attributes as they came.", " Lieferling hat ihre Attribute gelassen, wie sie kamen."},
+	"marked": {" Lieferling marked it as downloaded (quarantine), so macOS checks it at first launch.", " Lieferling hat sie als geladen gekennzeichnet (Quarantäne), damit macOS sie beim ersten Start prüft."},
+}
+
+func sentence(c Check, r *Report, lang Lang) string {
+	o := r.Origin
 	p, ok := sentences[textKey{c.ID, c.Result, c.Code}]
 	if !ok {
 		return ""
@@ -202,7 +257,8 @@ func sentence(c Check, o *Origin, lang Lang) string {
 		}
 	}
 	return strings.NewReplacer("{source}", c.Source, "{want}", want, "{got}", got,
-		"{workflow}", workflow, "{ref}", ref, "{commit}", commit, "{repo}", repo).Replace(p.in(lang))
+		"{workflow}", workflow, "{ref}", ref, "{commit}", commit, "{repo}", repo,
+		"{quarantine}", quarantineClauses[r.Quarantine].in(lang)).Replace(p.in(lang))
 }
 
 // senderIn rewrites a Sender.String() in lang.

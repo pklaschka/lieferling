@@ -66,6 +66,22 @@ func main() {
 		m.AddRole(application.About)
 		m.AddSeparator()
 		commandItem = m.Add("Kommandozeilen-Tool installieren …")
+		// the customs policy for all apps; one app's exception is in its row menu
+		zoll := m.AddSubmenu("Zollkontrolle")
+		current := svc.Policy()
+		svc.policyItems = map[string]*application.MenuItem{}
+		for _, p := range []struct{ value, label string }{{"standard", "Standard"}, {"strict", "Streng"}} {
+			item := zoll.AddRadio(p.label, current == p.value)
+			value := p.value
+			item.OnClick(func(*application.Context) {
+				_ = svc.SetPolicy(context.Background(), "", value)
+			})
+			svc.policyItems[value] = item
+		}
+		zoll.AddSeparator()
+		zoll.Add("Was wird geprüft?").OnClick(func(*application.Context) {
+			_ = app.Browser.OpenURL("https://github.com/pklaschka/lieferling#customs-check")
+		})
 		m.AddSeparator()
 		m.AddRole(application.ServicesMenu)
 		m.AddSeparator()

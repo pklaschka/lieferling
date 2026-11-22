@@ -151,8 +151,52 @@ Without the app, download `lieferling-cli-<version>-darwin-<arch>.tar.gz` from t
 
 - **Release:** the newest non-draft release; on the `stable` channel release candidates ("pre-releases") are skipped.
 - **File:** the release asset that fits this Mac. A `.dmg` beats a `.zip`; a file naming this processor (`arm64`, `x64`, …) beats a `universal` one, which beats one naming no processor. On Apple Silicon an Intel-only build is the last resort (it runs through Rosetta). Files naming another system are never picked, and a bare `.zip` only when it names macOS.
-- **Customs:** before anything is replaced, Lieferling checks the package. The SHA-256 of the download is compared with the checksum the forge lists (GitHub does for newer releases), with a checksum file in the same release (`SHA256SUMS`, `checksums.txt`, `<file>.sha256`) and with what your other Macs saw for the same version (kept in the shared list). The app's bundle ID and team ID are compared with the last version. A package that fails is not installed; the row says why, and `lieferling install`/`update` exit with 3. When only the sender changed, the app and the command line ask first (`--accept-sender` answers yes in scripts). The checksums show that the download is intact and unchanged, not who built it. For that, Lieferling also reads the build attestation GitHub keeps for a release file built by GitHub Actions (`actions/attest-build-provenance`) and checks with Sigstore that it was built in the app's own repository. A repository that was renamed or moved signs its attestations under the new name, so its packages are held until you remove the app and add it under that name. `lieferling policy strict` makes a checksum and an attestation mandatory for every app; `lieferling policy <repo> standard` exempts one, `--workflow release.yml` requires one workflow. `lieferling verify <repo>` runs the check without installing and exits with 3 when the package would be held. Lieferling's own releases carry attestations.
-- **Install:** like the original script. Quit the running app (it may ask about unsaved work), replace the copy in `/Applications` and clear the quarantine flag. When `/Applications` is not writable, Lieferling asks for an administrator password.
+- **Customs:** before anything is replaced, Lieferling checks the package. See [Customs check](#customs-check).
+- **Install:** like the original script. Quit the running app (it may ask about unsaved work), replace the copy in `/Applications` and clear the quarantine flag so macOS opens an unsigned app. A signed and notarized app keeps its attributes. When `/Applications` is not writable, Lieferling asks for an administrator password.
+
+## Customs check
+
+Every package goes through customs before anything on your Mac is quit or replaced. The result is the note »Zoll« under the app's row: one line, unfolding to one line per check. A package that is stopped is not installed, its file is discarded, and the note stays open and says why.
+
+**What is compared**
+
+- **Prüfsumme (checksum).** The SHA-256 of the download is computed while it arrives and compared with the checksum the forge lists (GitHub does for newer releases), with a checksum file in the same release (`SHA256SUMS`, `checksums.txt`, `<file>.sha256`) and with what your other Macs saw for the same version, kept in the shared list. This shows that the file is intact and was not swapped after one of your Macs saw it. It does not show who built it: whoever can replace a release file can replace the checksum file next to it.
+- **Herkunft (build attestation).** GitHub keeps signed build attestations for files built by GitHub Actions. Lieferling asks for the attestation of exactly this file and checks it with Sigstore: it must come from the app's own repository and, if you require one, from one workflow. This shows where the file was built, not that its code is harmless. A repository that was renamed or moved signs under its new name, so its packages are held until you remove the app and add it under that name.
+- **Absender (sender).** The app's bundle ID and, for a signed app, its team ID are compared with the last version. The first install of an app is trusted as it is; from then on a change asks first, in the window and on the command line.
+- **Apple-Signatur.** Lieferling reads the code signature (`codesign`) and asks macOS whether Apple notarized the app (`spctl`). An app signed ad hoc, with a certificate macOS does not trust (a self-signed one), or not at all counts as not signed, and so does an app whose signature `codesign` could not read in time. A signature that is present but broken, or whose certificate was revoked, stops the package. The tag after the verdict (»3 von 3«) counts only Lieferling's own comparisons, not this line.
+
+**Verdicts:** »Geprüft und freigegeben« (something matched, nothing contradicted), »Durchgelassen, es gab nichts zu vergleichen« (nothing contradicted, but nothing could be compared), »Angehalten, nichts wurde installiert« (held, or the sender changed and waits for your answer), »Widerspruch zwischen deinen Macs« (another Mac saw a different package for the installed version) and »Nicht geprüft« (switched off for this app). `lieferling list` marks a held app.
+
+**Policies**
+
+| Policy | Checksum | Build attestation | Sender change |
+|---|---|---|---|
+| `standard` (default) | checked when there is one | checked when there is one | asks |
+| `strict` | required | required | holds |
+| `off` (one app only) | not checked | not checked | not checked |
+
+A contradiction always holds, whatever the policy. Set the policy for all apps in the app menu (**Lieferling → Zollkontrolle**) or with `lieferling policy standard|strict`, and an exception for one app in its row menu (**Zollkontrolle …**) or with `lieferling policy <repo> standard|strict|off|default`. Forgejo and Gitea issue no build attestations, and GitHub issues them for private repositories only on Enterprise Cloud plans, so under `strict` those apps need an exception; `lieferling policy` lists them.
+
+**For developers.** Publish attestations from your release workflow and your users can require them:
+
+```yaml
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+# …after building, before publishing:
+- uses: actions/attest-build-provenance@v4
+  with:
+    subject-path: dist/*
+```
+
+Users then pin the workflow with `lieferling policy owner/name --workflow release.yml`: from then on only files with a confirmed attestation from that workflow are installed. Lieferling's own releases are attested this way.
+
+**Quarantine.** macOS only checks an app with Gatekeeper when it carries the quarantine flag, which a file Lieferling downloads does not get. Lieferling removes the flag from apps that are not notarized, because macOS would refuse to open them, and leaves a signed and notarized app's attributes as they came. The note says which.
+
+**Scripts.** `lieferling verify <repo>` runs the whole check and installs nothing; it exits with 0 when the package would be installed and 3 when it would be held or needs a question (`--strict` judges by the strict policy, `--json` prints the report). `install` and `update` exit with 3 as well. `--accept-sender` accepts a changed sender without asking; `--accept-digest sha256:…` installs a package although another Mac saw a different one for the same version, after you have checked why (for example a developer who uploaded the file again).
+
+**Limits.** The shared list in iCloud is the trust boundary: whoever can write to it can change digests, senders and policies. Every Mac should run a current Lieferling, because an older one drops fields it does not know when it rewrites the list. Checking an attestation needs Sigstore's trust root, which Lieferling loads from `tuf-repo-cdn.sigstore.dev` (and `tuf-repo.github.com` for private repositories) at most once a day; a private repository's attestations need a token that may read them ("Attestations: read"). Nothing here says that an app's code is harmless.
 
 If two Macs change the list at the same time, iCloud keeps both files ("config 2.json"); Lieferling merges them the next time it writes. An app removed on one Mac can come back that way, so remove it again.
 

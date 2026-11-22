@@ -111,6 +111,7 @@
           <svg class="icon tick" aria-hidden="true"><use href="#i-check"/></svg>
           Vorabversionen verfolgen
         </button>
+        <button type="button" role="menuitem" data-act="policy">Zollkontrolle …</button>
         <button type="button" role="menuitem" data-act="release">Release öffnen</button>
         <button type="button" role="menuitem" data-act="link">Link für die README kopieren</button>
         <hr>
@@ -187,6 +188,24 @@
       <div class="dialog-actions">
         <button value="cancel" class="button" autofocus>Nicht installieren</button>
         <button value="accept" class="button danger">Annehmen und installieren</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="customs-policy" aria-labelledby="policy-title">
+    <form method="dialog">
+      <h2 id="policy-title"></h2>
+      <fieldset class="choices">
+        <legend class="visually-hidden">Wie streng prüfen?</legend>
+        <label class="check choice"><input type="radio" name="policy" value="default"> <span data-label="default"></span></label>
+        <label class="check choice"><input type="radio" name="policy" value="standard"> <span><b>Standard:</b> prüfen, was sich prüfen lässt</span></label>
+        <label class="check choice"><input type="radio" name="policy" value="strict" aria-describedby="policy-unmet"> <span><b>Streng:</b> Prüfsumme und Herkunftsnachweis sind Pflicht</span></label>
+        <p class="choice-note" id="policy-unmet" hidden></p>
+        <label class="check choice"><input type="radio" name="policy" value="off"> <span><b>Aus:</b> diese App nicht prüfen</span></label>
+      </fieldset>
+      <div class="dialog-actions">
+        <button value="cancel" class="button">Abbrechen</button>
+        <button value="ok" class="button ink">Übernehmen</button>
       </div>
     </form>
   </dialog>

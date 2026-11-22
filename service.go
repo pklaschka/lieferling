@@ -42,6 +42,9 @@ type AppService struct {
 	relaunch func() // quits and opens the new copy
 	notify   func(title, body string)
 
+	// policyItems are the radio items of the menu Zollkontrolle, by policy
+	policyItems map[string]*application.MenuItem
+
 	mu   sync.Mutex
 	last []store.Status // newest list, for the tray and notifications
 	link *deeplink.Link // a deep link the window has not handled yet
@@ -154,6 +157,36 @@ func (s *AppService) Icon(ctx context.Context, repo string) (string, error) {
 	return "data:" + ic.MIME + ";base64," + base64.StdEncoding.EncodeToString(ic.Data), nil
 }
 
+// SetPolicy sets the customs policy: for all apps with repo "" ("standard"
+// or "strict"), or one app's exception ("standard", "strict", "off" or
+// "default").
+func (s *AppService) SetPolicy(ctx context.Context, repo, policy string) error {
+	if err := s.store.SetPolicy(repo, policy); err != nil {
+		s.showPolicy()
+		return translate(err)
+	}
+	s.showPolicy()
+	s.changed(ctx)
+	return nil
+}
+
+// Policy is the customs policy for all apps: "standard" or "strict".
+func (s *AppService) Policy() string {
+	p, err := s.store.Policies()
+	if err != nil {
+		return string(verify.Standard)
+	}
+	return p.Global
+}
+
+// showPolicy checks the menu item of the current policy, which may have
+// changed on another Mac or on the command line.
+func (s *AppService) showPolicy() {
+	if item, ok := s.policyItems[s.Policy()]; ok && !item.Checked() {
+		item.SetChecked(true)
+	}
+}
+
 // ConfigPath says where the shared list lives.
 func (s *AppService) ConfigPath() string { return s.store.ConfigPath }
 
@@ -183,4 +216,5 @@ func (s *AppService) remember(list []store.Status) {
 	s.mu.Lock()
 	s.last = list
 	s.mu.Unlock()
+	s.showPolicy()
 }

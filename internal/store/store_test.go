@@ -24,6 +24,7 @@ type fakeInstaller struct {
 	identity          install.Identity
 	installedIdentity map[string]install.Identity
 	placed            int
+	quarantine        install.Quarantine // what Install reports
 }
 
 func (f *fakeInstaller) Install(ctx context.Context, file, asset string, inspect install.Inspect) (install.Result, error) {
@@ -42,7 +43,7 @@ func (f *fakeInstaller) Install(ctx context.Context, file, asset string, inspect
 		f.installedIdentity = map[string]install.Identity{}
 	}
 	f.installedIdentity["/Applications/Demo.app"] = f.identity
-	return install.Result{Path: "/Applications/Demo.app", AppName: "Demo"}, nil
+	return install.Result{Path: "/Applications/Demo.app", AppName: "Demo", Quarantine: f.quarantine}, nil
 }
 
 func (f *fakeInstaller) Identity(_ context.Context, path string) install.Identity {

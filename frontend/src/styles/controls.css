@@ -93,6 +93,9 @@ input:is([type="text"], [type="url"])[aria-invalid="true"] { border-color: var(-
   scale: 0;
   transition: scale 120ms var(--ease);
 }
+/* a radio is the same box, round, with a dot instead of the tick */
+.check input[type="radio"] { border-radius: 50%; }
+.check input[type="radio"]::before { inline-size: 0.375rem; border-radius: 50%; mask: none; }
 .check input:hover:not(:disabled) { border-color: var(--ink); }
 .check input:checked { background: var(--ink); border-color: var(--ink); }
 .check input:checked::before { scale: 1; }
