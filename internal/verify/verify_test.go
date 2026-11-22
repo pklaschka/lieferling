@@ -143,26 +143,114 @@ func TestDecide(t *testing.T) {
 		p      Policy
 		checks []Check
 		want   Verdict
-		policy bool // a policy line was added
+		policy []string // the policy lines added
 	}{
-		{"all pass", Standard, []Check{pass(CheckForgeDigest), skip(CheckSynced), pass(CheckSender)}, Cleared, false},
-		{"nothing to compare", Standard, []Check{skip(CheckForgeDigest), skip(CheckChecksums), skip(CheckSynced), skip(CheckSender)}, Unchecked, false},
-		{"digest fails", Standard, []Check{fail(CheckForgeDigest), pass(CheckSender)}, Held, false},
-		{"synced fails", Standard, []Check{pass(CheckForgeDigest), fail(CheckSynced)}, Held, false},
-		{"sender standard", Standard, []Check{pass(CheckForgeDigest), fail(CheckSender)}, Ask, false},
-		{"sender strict", Strict, []Check{pass(CheckChecksums), fail(CheckSender)}, Held, false},
-		{"strict without checksum", Strict, []Check{skip(CheckForgeDigest), skip(CheckChecksums), pass(CheckSynced)}, Held, true},
-		{"strict with checksum", Strict, []Check{pass(CheckChecksums), pass(CheckSynced)}, Cleared, false},
-		{"digest fail beats sender", Standard, []Check{fail(CheckSynced), fail(CheckSender)}, Held, false},
+		{"all pass", Standard, []Check{pass(CheckForgeDigest), skip(CheckSynced), pass(CheckSender)}, Cleared, nil},
+		{"nothing to compare", Standard, []Check{skip(CheckForgeDigest), skip(CheckChecksums), skip(CheckSynced), skip(CheckAttestation), skip(CheckSender)}, Unchecked, nil},
+		{"digest fails", Standard, []Check{fail(CheckForgeDigest), pass(CheckSender)}, Held, nil},
+		{"synced fails", Standard, []Check{pass(CheckForgeDigest), fail(CheckSynced)}, Held, nil},
+		{"attestation fails under standard", Standard, []Check{pass(CheckForgeDigest), fail(CheckAttestation)}, Held, nil},
+		{"attestation alone clears", Standard, []Check{skip(CheckForgeDigest), pass(CheckAttestation)}, Cleared, nil},
+		{"sender standard", Standard, []Check{pass(CheckForgeDigest), fail(CheckSender)}, Ask, nil},
+		{"sender strict", Strict, []Check{pass(CheckChecksums), pass(CheckAttestation), fail(CheckSender)}, Held, nil},
+		{"strict without checksum", Strict, []Check{skip(CheckForgeDigest), skip(CheckChecksums), pass(CheckSynced), pass(CheckAttestation)}, Held, []string{"checksum_required"}},
+		{"strict without attestation", Strict, []Check{pass(CheckForgeDigest), skip(CheckAttestation)}, Held, []string{"attestation_required"}},
+		{"strict lacking both", Strict, []Check{skip(CheckForgeDigest), skip(CheckAttestation)}, Held, []string{"checksum_required", "attestation_required"}},
+		{"strict with both", Strict, []Check{pass(CheckChecksums), pass(CheckAttestation), pass(CheckSynced)}, Cleared, nil},
+		{"digest fail beats sender", Standard, []Check{fail(CheckSynced), fail(CheckSender)}, Held, nil},
+		{"a workflow pin holds", Standard, []Check{pass(CheckForgeDigest), {ID: CheckPolicy, Result: Fail, Code: "workflow_required"}}, Held, nil},
+		{"a signature pass alone stays unchecked", Standard, []Check{skip(CheckForgeDigest), pass("signature")}, Unchecked, nil},
 	} {
-		v, checks := Decide(c.p, c.checks)
+		v, checks := Decide(c.p, append([]Check(nil), c.checks...))
 		if v != c.want {
 			t.Errorf("%s: verdict %s, want %s", c.name, v, c.want)
 		}
-		added := len(checks) > len(c.checks) && checks[len(checks)-1].ID == CheckPolicy
-		if added != c.policy {
-			t.Errorf("%s: policy line added = %v", c.name, added)
+		var added []string
+		for _, ch := range checks[len(c.checks):] {
+			added = append(added, ch.Code)
 		}
+		if strings.Join(added, ",") != strings.Join(c.policy, ",") {
+			t.Errorf("%s: policy lines %v, want %v", c.name, added, c.policy)
+		}
+		v2, again := Decide(c.p, checks)
+		if v2 != v || len(again) != len(checks) {
+			t.Errorf("%s: a second Decide gave %s with %d lines, want %s with %d", c.name, v2, len(again), v, len(checks))
+		}
+	}
+}
+
+func TestNormalizeWorkflow(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                               "",
+		"none":                           "",
+		"NONE":                           "",
+		"release.yml":                    ".github/workflows/release.yml",
+		"build.yaml":                     ".github/workflows/build.yaml",
+		".github/workflows/release.yml":  ".github/workflows/release.yml",
+		"/.github/workflows/release.yml": ".github/workflows/release.yml",
+		" release.yml ":                  ".github/workflows/release.yml",
+	} {
+		got, err := NormalizeWorkflow(in)
+		if err != nil || got != want {
+			t.Errorf("NormalizeWorkflow(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"release", "workflows/release.yml", ".github/workflows/sub/x.yml", "release.yml@main", "../x.yml", ".github/release.yml"} {
+		if got, err := NormalizeWorkflow(bad); err == nil {
+			t.Errorf("NormalizeWorkflow(%q) = %q, want an error", bad, got)
+		}
+	}
+}
+
+func TestRequireWorkflow(t *testing.T) {
+	const w = ".github/workflows/release.yml"
+	for _, c := range []struct {
+		name   string
+		checks []Check
+		pin    string
+		added  bool
+	}{
+		{"skip", []Check{{ID: CheckAttestation, Result: Skip, Code: "none"}}, w, true},
+		{"no line at all", nil, w, true},
+		{"pass", []Check{{ID: CheckAttestation, Result: Pass}}, w, false},
+		{"fail", []Check{{ID: CheckAttestation, Result: Fail}}, w, false},
+		{"no pin", []Check{{ID: CheckAttestation, Result: Skip}}, "", false},
+		{"already there", []Check{{ID: CheckPolicy, Result: Fail, Code: "workflow_required"}}, w, false},
+	} {
+		got := RequireWorkflow(c.checks, c.pin)
+		if added := len(got) > len(c.checks); added != c.added {
+			t.Errorf("%s: added = %v", c.name, added)
+		}
+		if c.added && (got[len(got)-1].Code != "workflow_required" || got[len(got)-1].Want != w) {
+			t.Errorf("%s: %+v", c.name, got[len(got)-1])
+		}
+	}
+}
+
+func TestOrigin(t *testing.T) {
+	o := Origin{Workflow: ".github/workflows/release.yml", Ref: "refs/heads/main", Commit: "4c1d9e0123456789"}
+	if o.WorkflowFile() != "release.yml" || o.ShortRef() != "main" || o.ShortCommit() != "4c1d9e0" {
+		t.Errorf("%q %q %q", o.WorkflowFile(), o.ShortRef(), o.ShortCommit())
+	}
+	for ref, want := range map[string]string{"refs/tags/v1.2.0": "v1.2.0", "refs/pull/3/merge": "refs/pull/3/merge", "": ""} {
+		if got := (Origin{Ref: ref}).ShortRef(); got != want {
+			t.Errorf("ShortRef(%q) = %q", ref, got)
+		}
+	}
+}
+
+func TestOriginSentence(t *testing.T) {
+	o := Origin{Repository: "pklaschka/lieferling", Workflow: ".github/workflows/release.yml", Ref: "refs/heads/main", Commit: "4c1d9e0123456789"}
+	r := Report{Verdict: Cleared, Origin: &o, Checks: []Check{Attested("GitHub", o, false)}}
+	Localize(&r, German)
+	want := "GitHub führt für genau diese Datei einen signierten Herkunftsnachweis: gebaut von .github/workflows/release.yml aus main beim Commit 4c1d9e0 in pklaschka/lieferling. Das zeigt, wo die Datei gebaut wurde, nicht, dass ihr Code harmlos ist."
+	if r.Checks[0].Text != want {
+		t.Errorf("German = %q", r.Checks[0].Text)
+	}
+	o.Signer = "github/artifact-attestations-workflows/.github/workflows/attest.yml"
+	Localize(&r, English)
+	if !strings.Contains(r.Checks[0].Text, "release.yml (signed by github/artifact-attestations-workflows/.github/workflows/attest.yml) from main") {
+		t.Errorf("English with signer = %q", r.Checks[0].Text)
 	}
 }
 
@@ -226,13 +314,27 @@ func TestWording(t *testing.T) {
 		SenderCheck(a, Sender{BundleID: "x"}, false),
 		SenderCheck(a, Sender{BundleID: "x"}, true),
 	)
+	o := Origin{Repository: "pklaschka/lieferling", Workflow: ".github/workflows/release.yml", Ref: "refs/heads/main", Commit: "4c1d9e0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Signer: "github/artifact-attestations-workflows/.github/workflows/attest.yml"}
+	checks = append(checks,
+		Attested("GitHub", o, false),
+		Attested("GitHub", o, true),
+		NotAttested("GitHub", "none", "", ""),
+		NotAttested("codeberg.org", "unsupported", "", ""),
+		NotAttested("GitHub", "unreadable", "", "403"),
+		NotAttested("GitHub", "trust", "", "offline"),
+		NotAttested("GitHub", "invalid", "", "bad"),
+		NotAttested("GitHub", "repository", "a/b", "c/d"),
+		NotAttested("GitHub", "workflow", ".github/workflows/release.yml", ".github/workflows/build.yml"),
+		SyncedAccepted(digB, digA),
+	)
+	checks = append(checks, RequireWorkflow(nil, ".github/workflows/release.yml")...)
 	_, withPolicy := Decide(Strict, nil)
 	checks = append(checks, withPolicy...)
 
 	seen := map[textKey]bool{}
 	for _, lang := range []Lang{English, German} {
 		for v := range summaries {
-			r := Report{Verdict: v, Version: "1.2.0", Checks: checks}
+			r := Report{Verdict: v, Version: "1.2.0", Checks: checks, Origin: &o}
 			Localize(&r, lang)
 			if r.Summary == "" || strings.Contains(r.Summary, "{") {
 				t.Errorf("summary %s in %d: %q", v, lang, r.Summary)

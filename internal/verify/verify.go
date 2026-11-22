@@ -82,14 +82,14 @@ const (
 	Skip Result = "skip" // not checkable: nothing to compare with
 )
 
-// Check IDs. Delivery 2 adds "attestation", delivery 3 "signature" and
-// "notarization".
+// Check IDs. Delivery 3 adds "signature" and "notarization".
 const (
 	CheckForgeDigest = "digest.forge"
 	CheckChecksums   = "digest.checksums"
 	CheckSynced      = "digest.synced"
+	CheckAttestation = "attestation" // a build attestation (Sigstore) for the file
 	CheckSender      = "sender"
-	CheckPolicy      = "policy" // a requirement of strict that nothing met
+	CheckPolicy      = "policy" // a requirement of the policy or a pin that nothing met
 )
 
 // Check is one line of the report. ID, Result and Code are stable; Text is
@@ -150,16 +150,18 @@ func (s Sender) text(lang Lang) string {
 
 // Report is the customs note for one package.
 type Report struct {
-	Version   string    `json:"version"`
-	Asset     string    `json:"asset"`
-	Digest    string    `json:"digest"` // "sha256:<64 lowercase hex>", computed while downloading
-	Policy    Policy    `json:"policy"`
-	Verdict   Verdict   `json:"verdict"`
-	Checks    []Check   `json:"checks"`
-	Before    *Sender   `json:"before,omitempty"` // set when the sender was compared and differs
-	After     *Sender   `json:"after,omitempty"`
+	Version string  `json:"version"`
+	Asset   string  `json:"asset"`
+	Digest  string  `json:"digest"` // "sha256:<64 lowercase hex>", computed while downloading
+	Policy  Policy  `json:"policy"`
+	Verdict Verdict `json:"verdict"`
+	Checks  []Check `json:"checks"`
+	Before  *Sender `json:"before,omitempty"` // set when the sender was compared and differs
+	After   *Sender `json:"after,omitempty"`
 	// Sender is who the package says it comes from, when it could be read.
 	Sender *Sender `json:"sender,omitempty"`
+	// Origin is set when a build attestation was verified.
+	Origin    *Origin   `json:"origin,omitempty"`
 	CheckedAt time.Time `json:"checkedAt"`
 	Summary   string    `json:"summary"` // the collapsed line, filled by Localize, never stored
 }
@@ -194,37 +196,59 @@ func (r Report) Stored() Report {
 	return r
 }
 
-// Decide turns checks into a verdict. It may append a CheckPolicy line.
+// Decide turns checks into a verdict. It may append CheckPolicy lines and is
+// idempotent: a policy line that is already there is not appended again, so
+// the store can decide before unpacking and again once the sender is known.
 //
-//	any digest.* fail                         -> Held
+//	any failing check other than sender       -> Held
 //	strict and neither digest.forge nor
-//	  digest.checksums passed                 -> append {policy, fail, "checksum_required"}, Held
+//	  digest.checksums passed                 -> append {policy, fail, "checksum_required"}
+//	strict and attestation did not pass       -> append {policy, fail, "attestation_required"}
+//	either appended                           -> Held
 //	sender fail, standard                     -> Ask
 //	sender fail, strict                       -> Held
-//	otherwise: at least one pass              -> Cleared, else Unchecked
+//	otherwise: a pass among digest.*,
+//	  attestation, sender                     -> Cleared, else Unchecked
 func Decide(p Policy, checks []Check) (Verdict, []Check) {
-	var digestFail, senderFail, published, anyPass bool
+	var held, senderFail, published, attested, anyPass bool
+	has := map[string]bool{}
 	for _, c := range checks {
 		switch {
-		case c.Result == Fail && strings.HasPrefix(c.ID, "digest."):
-			digestFail = true
 		case c.Result == Fail && c.ID == CheckSender:
 			senderFail = true
 		case c.Result == Fail:
-			digestFail = true // any other failing check holds as well
+			held = true
 		}
-		if c.Result == Pass {
+		if c.ID == CheckPolicy {
+			has[c.Code] = true
+		}
+		if c.Result != Pass {
+			continue
+		}
+		switch {
+		case c.ID == CheckForgeDigest || c.ID == CheckChecksums:
+			published, anyPass = true, true
+		case c.ID == CheckAttestation:
+			attested, anyPass = true, true
+		case strings.HasPrefix(c.ID, "digest.") || c.ID == CheckSender:
 			anyPass = true
-			if c.ID == CheckForgeDigest || c.ID == CheckChecksums {
-				published = true
+		}
+	}
+	if p == Strict {
+		if !published {
+			held = true
+			if !has["checksum_required"] {
+				checks = append(checks, Check{ID: CheckPolicy, Result: Fail, Code: "checksum_required"})
+			}
+		}
+		if !attested {
+			held = true
+			if !has["attestation_required"] {
+				checks = append(checks, Check{ID: CheckPolicy, Result: Fail, Code: "attestation_required"})
 			}
 		}
 	}
-	if digestFail {
-		return Held, checks
-	}
-	if p == Strict && !published {
-		checks = append(checks, Check{ID: CheckPolicy, Result: Fail, Code: "checksum_required"})
+	if held {
 		return Held, checks
 	}
 	if senderFail {
