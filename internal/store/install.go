@@ -225,6 +225,7 @@ func (s *Store) clear(ctx context.Context, app *config.App, rel forge.Release, a
 			return rep, none, verify.Sender{}, nil
 		}
 		res, err := s.Installer.Install(ctx, file, asset.Name, nil)
+		rep.Quarantine = string(res.Quarantine)
 		return rep, res, verify.Sender{}, err
 	}
 
@@ -254,6 +255,11 @@ func (s *Store) clear(ctx context.Context, app *config.App, rel forge.Release, a
 		if !known.IsZero() && !known.Equal(now) {
 			rep.Before, rep.After = &known, &now
 		}
+		id := u.Identity
+		rep.Checks = append(rep.Checks, verify.SigningChecks(verify.Signing{
+			State: string(id.Signature), Authority: id.Authority, Problem: id.Problem,
+			Assessed: id.Assessed, Notarized: id.Notarized, Revoked: id.Revoked, Stapled: id.Stapled,
+		})...)
 		rep.Verdict, rep.Checks = verify.Decide(rep.Policy, rep.Checks)
 		switch {
 		case rep.Verdict == verify.Ask:
@@ -275,6 +281,7 @@ func (s *Store) clear(ctx context.Context, app *config.App, rel forge.Release, a
 	case err != nil:
 		return verify.Report{}, none, verify.Sender{}, err
 	}
+	rep.Quarantine = string(res.Quarantine)
 	return rep, res, now, nil
 }
 

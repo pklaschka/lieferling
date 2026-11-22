@@ -11,6 +11,7 @@ import (
 	"github.com/pklaschka/lieferling/internal/attest"
 	"github.com/pklaschka/lieferling/internal/config"
 	"github.com/pklaschka/lieferling/internal/forge"
+	"github.com/pklaschka/lieferling/internal/install"
 	"github.com/pklaschka/lieferling/internal/state"
 	"github.com/pklaschka/lieferling/internal/verify"
 )
@@ -331,5 +332,41 @@ func TestSetWorkflow(t *testing.T) {
 	s.SetWorkflow("me/demo", "none")
 	if p, _ := s.Policies(); policyOf(p, "me/demo").Workflow != "" {
 		t.Error("none did not clear the pin")
+	}
+}
+
+func TestInvalidSignatureHolds(t *testing.T) {
+	s, fi := newTestStore(t, demoRelease("v1.0.0", forge.Asset{Name: asset1, Digest: digestOf("contents of " + asset1)}))
+	fi.identity = install.Identity{BundleID: "de.example.demo", Signature: install.Invalid, Authority: "Developer ID Application: X (ABCDE12345)", Problem: "a sealed resource is missing or invalid"}
+	st, err := s.Install(context.Background(), "me/demo", nil)
+	if !errors.Is(err, verify.ErrHeld) || fi.placed != 0 {
+		t.Fatalf("err = %v, placed = %d", err, fi.placed)
+	}
+	if c := st.Customs.FirstFailure(); c == nil || c.ID != verify.CheckSignature || c.Code != "invalid" {
+		t.Errorf("first failure = %+v", c)
+	}
+}
+
+func TestSigningInReport(t *testing.T) {
+	s, fi := newTestStore(t, demoRelease("v1.0.0", forge.Asset{Name: asset1}))
+	fi.identity = install.Identity{BundleID: "de.example.demo", Signature: install.Valid, Authority: "Developer ID Application: X (ABCDE12345)", Assessed: true, Notarized: true}
+	fi.quarantine = install.Left
+	st, err := s.Install(context.Background(), "me/demo", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, c := range st.Customs.Checks {
+		ids = append(ids, c.ID)
+	}
+	if got := strings.Join(ids, " "); got != "digest.forge digest.checksums digest.synced attestation sender signature notarization" {
+		t.Errorf("order = %s", got)
+	}
+	if c := checkOf(st.Customs, verify.CheckNotarization); c.Code != "notarized" || !strings.Contains(c.Text, "left its attributes") {
+		t.Errorf("notarization = %+v", c)
+	}
+	// a valid signature alone does not clear a package nothing was compared for
+	if st.Customs.Verdict != verify.Unchecked || st.Customs.Quarantine != "left" {
+		t.Errorf("verdict %s, quarantine %q", st.Customs.Verdict, st.Customs.Quarantine)
 	}
 }
