@@ -593,7 +593,7 @@ func assess(ctx context.Context, app string, id Identity) Identity
 `assess`, each command under its own 60 s deadline and with `CombinedOutput` (all three print to stderr):
 
 1. `codesign -dv --verbose=4 <app>` and `parseSignature`. Unsigned or ad hoc: return.
-2. `codesign --verify --deep --strict --verbose=2 <app>`. Exit 0: `Valid`. Otherwise `Invalid` with the last output line in `Problem`; return.
+2. `codesign --verify --deep --strict --verbose=2 <app>`. Exit 0: `Valid`. Otherwise `Invalid` with the last output line in `Problem`; return. (As built: `CERT_REVOKED` in the output counts as revoked and `CSSMERR_TP_NOT_TRUSTED` as `Untrusted`, which reads like ad hoc; a tool that is missing, timed out or gave no output leaves the signature `Unknown`, which holds nothing and clears the quarantine as before. Both mappings need hand check on a Mac.)
 3. `spctl --assess --type execute -vv <app>` and `parseAssessment`. `Notarized = accepted && source == "Notarized Developer ID"`. Not usable, or the deadline passed: `Assessed = false`, and the app counts as not notarized.
 4. Stapled: when `xcode-select -p` succeeds, `xcrun stapler validate <app>` exit 0. When it does not (no command line tools; calling `stapler` then makes macOS offer to install them), the existence of `<app>/Contents/CodeResources`, which is where a stapled ticket lives. `Stapled` is information for the line; the decision rests on `spctl`.
 
