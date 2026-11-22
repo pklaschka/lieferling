@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write # the OIDC token Sigstore signs the build attestation for
+  attestations: write # store the attestations with the repository
 
 # one release at a time, in merge order
 concurrency:
@@ -71,6 +73,13 @@ jobs:
             GOOS=darwin GOARCH=$arch go build -ldflags "-s -w" -o lieferling ./cmd/lieferling
             tar -czf "dist/lieferling-cli-$VERSION-darwin-$arch.tar.gz" lieferling
           done
+      # before publishing, so a release never appears without its attestations;
+      # Lieferling checks them at customs (lieferling verify pklaschka/lieferling)
+      - name: Attest the release files
+        if: steps.version.outputs.version != ''
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
       - name: Publish the release
         if: steps.version.outputs.version != ''
         env:

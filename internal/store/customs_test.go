@@ -230,17 +230,24 @@ func TestSenderChangeAsks(t *testing.T) {
 
 func TestSenderChangeHoldsUnderStrict(t *testing.T) {
 	releases := demoRelease("v1.0.0", forge.Asset{Name: asset1, Digest: digestOf("contents of " + asset1)})
-	s, fi := newTestStore(t, releases)
+	next := "Demo-1.1.0-arm64.dmg"
+	route := &attestRoute{bundles: map[string][]string{digestOf("contents of " + next): {`{}`}}}
+	s, fi := newTestStoreAttested(t, releases, nil, route)
+	s.Attest = &fakeAttester{good: map[string]bool{digestOf("contents of " + next): true}}
 	ctx := context.Background()
 	fi.identity = senderA
 	if _, err := s.Install(ctx, "me/demo", nil); err != nil {
 		t.Fatal(err)
 	}
 	config.Update(s.ConfigPath, func(c *config.Config) error { c.Verify = "strict"; return nil })
-	releases["me/demo"][0] = forge.Release{TagName: "v1.1.0", Assets: []forge.Asset{{Name: "Demo-1.1.0-arm64.dmg", Digest: digestOf("contents of Demo-1.1.0-arm64.dmg")}}}
+	releases["me/demo"][0] = forge.Release{TagName: "v1.1.0", Assets: []forge.Asset{{Name: next, Digest: digestOf("contents of " + next)}}}
 	fi.identity = senderB
-	if _, err := s.Install(ctx, "me/demo", nil); !errors.Is(err, verify.ErrHeld) {
+	st, err := s.Install(ctx, "me/demo", nil)
+	if !errors.Is(err, verify.ErrHeld) {
 		t.Fatalf("err = %v", err)
+	}
+	if st.Customs.FirstFailure().ID != verify.CheckSender {
+		t.Errorf("held for another reason: %+v", st.Customs.Checks)
 	}
 	if _, err := s.AcceptSender(ctx, "me/demo", nil); err == nil {
 		t.Error("a strict hold could be accepted")

@@ -119,3 +119,25 @@ func TestMergePolicy(t *testing.T) {
 		t.Errorf("policy = %q, app %q", cfg.Verify, cfg.Find("a/one").Verify)
 	}
 }
+
+func TestMergeWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := Update(path, func(c *Config) error {
+		c.Apps = []App{{Repo: "a/one"}, {Repo: "b/two", Workflow: ".github/workflows/release.yml"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeConflict(t, dir, `{"version":1,"apps":[{"repo":"a/one","workflow":".github/workflows/build.yml"},{"repo":"b/two","workflow":".github/workflows/other.yml"}]}`)
+	if err := Update(path, func(*Config) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := Load(path)
+	if a := cfg.Find("a/one"); a.Workflow != ".github/workflows/build.yml" {
+		t.Errorf("empty pin not filled: %+v", a)
+	}
+	if b := cfg.Find("b/two"); b.Workflow != ".github/workflows/release.yml" {
+		t.Errorf("main pin not kept: %+v", b)
+	}
+}

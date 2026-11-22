@@ -6,4 +6,4 @@ export {AppService} from "../bindings/github.com/pklaschka/lieferling";
 export {type Command, CommandState} from "../bindings/github.com/pklaschka/lieferling/internal/install/models";
 export type {Link} from "../bindings/github.com/pklaschka/lieferling/internal/deeplink/models";
 export type {ImportItem, ImportPlan, Status} from "../bindings/github.com/pklaschka/lieferling/internal/store/models";
-export type {Check, Report, Sender} from "../bindings/github.com/pklaschka/lieferling/internal/verify/models";
+export type {Check, Origin, Report, Sender} from "../bindings/github.com/pklaschka/lieferling/internal/verify/models";

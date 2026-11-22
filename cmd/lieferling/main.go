@@ -3,8 +3,10 @@
 //
 //	lieferling list                         apps on the list, installed and newest version
 //	lieferling add <repo> [--prerelease]    put a repository on the list
-//	lieferling install <repo> [--accept-sender]  install (adds it to the list if needed)
-//	lieferling update [<repo>...] [--accept-sender]  update the given apps, or every app with an update
+//	lieferling install <repo> [--accept-sender] [--accept-digest sha256:…]  install (adds it to the list if needed)
+//	lieferling update [<repo>...] [--accept-sender] [--accept-digest sha256:…]  update the given apps, or every app with an update
+//	lieferling verify <repo> [--strict] [--json]  check the newest package at customs, install nothing
+//	lieferling policy [<repo>] [standard|strict|off|default] [--workflow <file>|none]  show or set the customs policy
 //	lieferling open <repo>                  start the installed app
 //	lieferling channel <repo> stable|prerelease
 //	lieferling remove <repo> [--uninstall]  take it off the list (and off this computer)
@@ -22,6 +24,8 @@
 // package verify). A package that fails is not installed, and the command
 // exits with 3. When only the sender changed, install and update ask on a
 // terminal; --accept-sender accepts the new sender without asking.
+// --accept-digest installs a package although another computer saw a
+// different one for the same version.
 package main
 
 import (
@@ -32,6 +36,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/pklaschka/lieferling/internal/pick"
@@ -61,7 +67,7 @@ func exitCode(err error) int {
 var errUsage = errors.New("usage")
 
 func usage() error {
-	return fmt.Errorf("%w: lieferling list | add <repo> [--prerelease] | install <repo> [--accept-sender] | update [<repo>...] [--accept-sender] | open <repo> | channel <repo> stable|prerelease | remove <repo> [--uninstall] | export [<file>] | import <file|url|-> [--dry-run] | paths", errUsage)
+	return fmt.Errorf("%w: lieferling list | add <repo> [--prerelease] | install <repo> [--accept-sender] [--accept-digest sha256:…] | update [<repo>...] [--accept-sender] [--accept-digest sha256:…] | verify <repo> [--strict] [--json] | policy [<repo>] [standard|strict|off|default] [--workflow <file>|none] | open <repo> | channel <repo> stable|prerelease | remove <repo> [--uninstall] | export [<file>] | import <file|url|-> [--dry-run] | paths", errUsage)
 }
 
 func run(ctx context.Context, s *store.Store, args []string, out io.Writer) error {
@@ -75,10 +81,31 @@ func run(ctx context.Context, s *store.Store, args []string, out io.Writer) erro
 	uninstall := fs.Bool("uninstall", false, "also remove the app from this computer")
 	dryRun := fs.Bool("dry-run", false, "only show what importing would add")
 	acceptSender := fs.Bool("accept-sender", false, "install even when the sender changed")
+	acceptDigest := fs.String("accept-digest", "", "install this package although another computer saw a different one")
+	strict := fs.Bool("strict", false, "verify by the strict policy")
+	asJSON := fs.Bool("json", false, "print the customs report as JSON")
+	workflow := fs.String("workflow", "", "the workflow that must have built the app (release.yml), or none")
 	if err := fs.Parse(reorder(rest)); err != nil {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
 	pos := fs.Args()
+	workflowSet := false
+	fs.Visit(func(f *flag.Flag) { workflowSet = workflowSet || f.Name == "workflow" })
+	if *acceptDigest != "" && !digestFlag.MatchString(*acceptDigest) {
+		return fmt.Errorf("%w: --accept-digest takes the full digest, sha256: and 64 hex digits, as lieferling verify prints it", errUsage)
+	}
+	acc := store.Accept{Digest: strings.ToLower(*acceptDigest)}
+	// flags that only one command reads are an error elsewhere, not ignored
+	only := map[string][]string{"accept-digest": {"install", "update", "upgrade"}, "workflow": {"policy"}, "strict": {"verify"}, "json": {"verify"}}
+	var misplaced error
+	fs.Visit(func(f *flag.Flag) {
+		if cmds, ok := only[f.Name]; ok && !slices.Contains(cmds, cmd) {
+			misplaced = fmt.Errorf("%w: --%s only works with %s", errUsage, f.Name, strings.Join(cmds, ", "))
+		}
+	})
+	if misplaced != nil {
+		return misplaced
+	}
 
 	switch cmd {
 	case "list", "ls":
@@ -104,10 +131,22 @@ func run(ctx context.Context, s *store.Store, args []string, out io.Writer) erro
 				return err
 			}
 		}
-		return install(ctx, s, pos[0], *acceptSender, out)
+		return install(ctx, s, pos[0], acc, *acceptSender, out)
 
 	case "update", "upgrade":
-		return updateApps(ctx, s, pos, *acceptSender, out)
+		if acc.Digest != "" && len(pos) != 1 {
+			return fmt.Errorf("%w: --accept-digest names one package; give exactly one repository", errUsage)
+		}
+		return updateApps(ctx, s, pos, acc, *acceptSender, out)
+
+	case "verify":
+		if len(pos) != 1 {
+			return usage()
+		}
+		return verifyApp(ctx, s, pos[0], *strict, *asJSON, out)
+
+	case "policy":
+		return policy(s, pos, *workflow, workflowSet, out)
 
 	case "open":
 		if len(pos) != 1 {
@@ -169,15 +208,27 @@ func channel(prerelease bool) string {
 	return pick.Stable
 }
 
+var digestFlag = regexp.MustCompile(`^(?i)sha256:[0-9a-f]{64}$`)
+
+// valueFlags take a value as the next argument ("--workflow release.yml").
+var valueFlags = map[string]bool{"workflow": true, "accept-digest": true}
+
 // reorder moves flags before the positional arguments, so that
-// "lieferling add owner/name --prerelease" works as well.
+// "lieferling add owner/name --prerelease" works as well. A flag in
+// valueFlags keeps the next argument unless it is written with "=".
 func reorder(args []string) []string {
 	var flags, pos []string
-	for _, a := range args {
-		if strings.HasPrefix(a, "-") {
-			flags = append(flags, a)
-		} else {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
 			pos = append(pos, a)
+			continue
+		}
+		flags = append(flags, a)
+		name := strings.TrimLeft(a, "-")
+		if valueFlags[name] && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
 		}
 	}
 	return append(flags, pos...)
@@ -188,10 +239,17 @@ lieferling manages apps installed from GitHub, Forgejo and Gitea releases.
 
   lieferling list                         apps on the list, installed and newest version
   lieferling add <repo> [--prerelease]    put a repository on the list
-  lieferling install <repo> [--accept-sender]
+  lieferling install <repo> [--accept-sender] [--accept-digest sha256:…]
                                           install (adds it to the list if needed)
-  lieferling update [<repo>...] [--accept-sender]
+  lieferling update [<repo>...] [--accept-sender] [--accept-digest sha256:…]
                                           update the given apps, or every app with an update
+  lieferling verify <repo> [--strict] [--json]
+                                          check the newest package at customs, install nothing
+  lieferling policy                       show the customs policy, exceptions and workflows
+  lieferling policy standard|strict       set the customs policy for all apps
+  lieferling policy <repo> standard|strict|off|default [--workflow <file>|none]
+                                          set an exception (default removes it) or the
+                                          workflow that must have built the app
   lieferling open <repo>                  start the installed app
   lieferling channel <repo> stable|prerelease
   lieferling remove <repo> [--uninstall]  take it off the list (and off this computer)
@@ -221,8 +279,18 @@ the download against what the forge lists, a checksum file in the release
 (SHA256SUMS, checksums.txt, <file>.sha256) and what your other computers saw
 for the same version; and the app's bundle ID and team ID against the last
 version. A package that fails is not installed and the command exits with 3.
-When only the sender changed, install and update ask; --accept-sender accepts
-the new sender without asking.
+If the release has a build attestation on GitHub, Lieferling checks with
+Sigstore that it was built in the app's own repository (and, with --workflow, by
+that workflow). When only the sender changed, install and update ask;
+--accept-sender accepts the new sender without asking. When another computer saw
+a different package for the same version, --accept-digest with the digest
+lieferling verify prints installs this one anyway.
+
+Policies: standard (the default) checks what is available. strict also
+requires a checksum from the forge or the release and a confirmed build
+attestation, and holds a sender change. off, for one app only, checks nothing.
+lieferling verify exits with 0 when the package would be installed, 3 when it
+would be held or needs a question.
 
 The list of apps is shared through iCloud Drive (Lieferling/config.json); what is
 installed is recorded on each computer.`

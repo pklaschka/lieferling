@@ -72,8 +72,34 @@ func newTestStore(t *testing.T, releases map[string][]forge.Release) (*Store, *f
 // "contents of <name>". Tests may change downloads between calls.
 func newTestStoreWith(t *testing.T, releases map[string][]forge.Release, downloads map[string]string) (*Store, *fakeInstaller) {
 	t.Helper()
+	return newTestStoreAttested(t, releases, downloads, nil)
+}
+
+// attestRoute serves /repos/<repo>/attestations/<digest>: bundles[digest] as
+// inline bundles, 404 when there are none. calls counts the requests.
+type attestRoute struct {
+	bundles map[string][]string
+	calls   int
+}
+
+func newTestStoreAttested(t *testing.T, releases map[string][]forge.Release, downloads map[string]string, att *attestRoute) (*Store, *fakeInstaller) {
+	t.Helper()
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, d, ok := strings.Cut(r.URL.Path, "/attestations/"); ok {
+			if att == nil {
+				http.NotFound(w, r)
+				return
+			}
+			att.calls++
+			bs := att.bundles[d]
+			if len(bs) == 0 {
+				http.NotFound(w, r)
+				return
+			}
+			w.Write([]byte(`{"attestations":[{"bundle":` + strings.Join(bs, `},{"bundle":`) + `}]}`))
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/download/") {
 			if r.Header.Get("Accept") != "application/octet-stream" {
 				http.Error(w, "wrong accept", 400)

@@ -39,6 +39,9 @@ type Status struct {
 	// Customs is the customs note to show: the report of a held package of
 	// the newest version, else the report of the installed copy, else nil.
 	Customs *verify.Report `json:"customs"`
+	// Policy is the app's own customs exception: "", "standard", "strict"
+	// or "off".
+	Policy string `json:"policy"`
 }
 
 // List returns the status of every app, asking the forges for all at once.
@@ -70,6 +73,7 @@ func (s *Store) List(ctx context.Context) ([]Status, error) {
 func (s *Store) status(ctx context.Context, a config.App, st state.State) Status {
 	out := s.statusOf(ctx, a, st)
 	out.Customs = customs(a, st, out)
+	out.Policy = a.Verify
 	return out
 }
 

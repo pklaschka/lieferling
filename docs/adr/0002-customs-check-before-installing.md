@@ -1,6 +1,7 @@
 # ADR 0002: Customs check before installing (#30), delivery 1 of 3
 
 - **Status:** Proposed
+- **Continued in:** [ADR 0003](0003-attestation-signature-and-quarantine.md), which specifies deliveries 2 and 3 and corrects two points of this one (the config fields, the open point on `--accept-digest`)
 - **Date:** 2026-11-21
 - **Decider:** Zuri
 

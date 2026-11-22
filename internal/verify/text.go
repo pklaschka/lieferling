@@ -119,6 +119,54 @@ var sentences = map[textKey]phrase{
 		"The package names no bundle ID, the sender cannot be compared.",
 		"Das Paket nennt keine Bundle-ID, der Absender lässt sich nicht vergleichen.",
 	},
+	{CheckSynced, Pass, "accepted"}: {
+		"One of your Macs saw a different package for this version, and you accepted this one.",
+		"Einer deiner Macs hat für diese Version ein anderes Paket gesehen, und du hast dieses angenommen.",
+	},
+	{CheckAttestation, Pass, "verified"}: {
+		"GitHub holds a signed build attestation for exactly this file: built by {workflow} from {ref} at commit {commit} in {repo}. This shows where the file was built, not that its code is harmless.",
+		"GitHub führt für genau diese Datei einen signierten Herkunftsnachweis: gebaut von {workflow} aus {ref} beim Commit {commit} in {repo}. Das zeigt, wo die Datei gebaut wurde, nicht, dass ihr Code harmlos ist.",
+	},
+	{CheckAttestation, Pass, "pinned"}: {
+		"GitHub holds a signed build attestation for exactly this file: built by {workflow} from {ref} at commit {commit} in {repo}. That is the workflow you require.",
+		"GitHub führt für genau diese Datei einen signierten Herkunftsnachweis: gebaut von {workflow} aus {ref} beim Commit {commit} in {repo}. Das ist der Workflow, den du verlangst.",
+	},
+	{CheckAttestation, Fail, "invalid"}: {
+		"GitHub holds a build attestation for this file, but its signature could not be confirmed.",
+		"GitHub führt für diese Datei einen Herkunftsnachweis, aber seine Signatur ließ sich nicht bestätigen.",
+	},
+	{CheckAttestation, Fail, "repository"}: {
+		"The build attestation for this file comes from another repository: expected {want}, found {got}.",
+		"Der Herkunftsnachweis für diese Datei stammt aus einem anderen Repository: erwartet {want}, gefunden {got}.",
+	},
+	{CheckAttestation, Fail, "workflow"}: {
+		"This file was built by {got}, and you require {want}.",
+		"Diese Datei wurde von {got} gebaut, und du verlangst {want}.",
+	},
+	{CheckAttestation, Skip, "none"}: {
+		"{source} holds no build attestation for this file.",
+		"{source} führt für diese Datei keinen Herkunftsnachweis.",
+	},
+	{CheckAttestation, Skip, "unsupported"}: {
+		"{source} issues no build attestations, so where this file was built cannot be checked.",
+		"{source} stellt keine Herkunftsnachweise aus, wo diese Datei gebaut wurde, lässt sich also nicht prüfen.",
+	},
+	{CheckAttestation, Skip, "unreadable"}: {
+		"{source} did not hand out the build attestations for this file.",
+		"{source} hat die Herkunftsnachweise für diese Datei nicht herausgegeben.",
+	},
+	{CheckAttestation, Skip, "trust"}: {
+		"A build attestation exists, but the Sigstore trust root needed to check it could not be loaded.",
+		"Es gibt einen Herkunftsnachweis, aber die Sigstore-Vertrauensanker zum Prüfen ließen sich nicht laden.",
+	},
+	{CheckPolicy, Fail, "attestation_required"}: {
+		"The strict policy requires a confirmed build attestation and there is none.",
+		"Die strenge Kontrolle verlangt einen bestätigten Herkunftsnachweis, es gibt keinen.",
+	},
+	{CheckPolicy, Fail, "workflow_required"}: {
+		"You require builds from {want} for this app, and no build attestation could be confirmed.",
+		"Du verlangst für diese App Builds aus {want}, und es ließ sich kein Herkunftsnachweis bestätigen.",
+	},
 	{CheckPolicy, Fail, "checksum_required"}: {
 		"The strict policy requires a published checksum and the release has none.",
 		"Die strenge Kontrolle verlangt eine veröffentlichte Prüfsumme, das Release hat keine.",
@@ -133,11 +181,11 @@ func Localize(r *Report, lang Lang) {
 	}
 	r.Summary = strings.ReplaceAll(summaries[r.Verdict].in(lang), "{version}", r.Version)
 	for i := range r.Checks {
-		r.Checks[i].Text = sentence(r.Checks[i], lang)
+		r.Checks[i].Text = sentence(r.Checks[i], r.Origin, lang)
 	}
 }
 
-func sentence(c Check, lang Lang) string {
+func sentence(c Check, o *Origin, lang Lang) string {
 	p, ok := sentences[textKey{c.ID, c.Result, c.Code}]
 	if !ok {
 		return ""
@@ -146,7 +194,15 @@ func sentence(c Check, lang Lang) string {
 	if c.ID == CheckSender {
 		want, got = senderIn(want, lang), senderIn(got, lang)
 	}
-	return strings.NewReplacer("{source}", c.Source, "{want}", want, "{got}", got).Replace(p.in(lang))
+	var workflow, ref, commit, repo string
+	if o != nil {
+		workflow, ref, commit, repo = o.Workflow, o.ShortRef(), o.ShortCommit(), o.Repository
+		if o.Signer != "" {
+			workflow += map[Lang]string{English: " (signed by ", German: " (signiert von "}[lang] + o.Signer + ")"
+		}
+	}
+	return strings.NewReplacer("{source}", c.Source, "{want}", want, "{got}", got,
+		"{workflow}", workflow, "{ref}", ref, "{commit}", commit, "{repo}", repo).Replace(p.in(lang))
 }
 
 // senderIn rewrites a Sender.String() in lang.
