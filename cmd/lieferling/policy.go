@@ -81,6 +81,19 @@ func policy(s *store.Store, pos []string, workflow string, workflowSet bool, out
 		return usage()
 	}
 	repo := pos[0]
+	// check both values before writing either, so a bad one changes nothing
+	if len(pos) == 2 {
+		switch strings.ToLower(pos[1]) {
+		case "standard", "strict", "off", "default":
+		default:
+			return fmt.Errorf("unknown policy %q: use standard, strict, off or default", pos[1])
+		}
+	}
+	if workflowSet {
+		if err := s.SetWorkflow(repo, workflow); err != nil {
+			return err
+		}
+	}
 	if len(pos) == 2 {
 		if err := s.SetPolicy(repo, pos[1]); err != nil {
 			return err
@@ -92,11 +105,15 @@ func policy(s *store.Store, pos []string, workflow string, workflowSet bool, out
 		}
 	}
 	if workflowSet {
-		if err := s.SetWorkflow(repo, workflow); err != nil {
-			return err
-		}
 		if w, _ := verify.NormalizeWorkflow(workflow); w != "" {
 			fmt.Fprintf(out, "%s must now be built by %s, with a build attestation.\n", repo, w)
+			if p, err := s.Policies(); err == nil {
+				for _, a := range p.Apps {
+					if a.Repo == repo && a.Policy == string(verify.Off) {
+						fmt.Fprintf(out, "The customs check is off for %s, so this is not checked until you switch it on: lieferling policy %s default\n", repo, repo)
+					}
+				}
+			}
 		} else {
 			fmt.Fprintf(out, "%s may be built by any workflow of its repository.\n", repo)
 		}

@@ -37,6 +37,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/pklaschka/lieferling/internal/pick"
@@ -94,6 +95,17 @@ func run(ctx context.Context, s *store.Store, args []string, out io.Writer) erro
 		return fmt.Errorf("%w: --accept-digest takes the full digest, sha256: and 64 hex digits, as lieferling verify prints it", errUsage)
 	}
 	acc := store.Accept{Digest: strings.ToLower(*acceptDigest)}
+	// flags that only one command reads are an error elsewhere, not ignored
+	only := map[string][]string{"accept-digest": {"install", "update", "upgrade"}, "workflow": {"policy"}, "strict": {"verify"}, "json": {"verify"}}
+	var misplaced error
+	fs.Visit(func(f *flag.Flag) {
+		if cmds, ok := only[f.Name]; ok && !slices.Contains(cmds, cmd) {
+			misplaced = fmt.Errorf("%w: --%s only works with %s", errUsage, f.Name, strings.Join(cmds, ", "))
+		}
+	})
+	if misplaced != nil {
+		return misplaced
+	}
 
 	switch cmd {
 	case "list", "ls":

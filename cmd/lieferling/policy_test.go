@@ -12,6 +12,7 @@ import (
 
 	"github.com/pklaschka/lieferling/internal/config"
 	inst "github.com/pklaschka/lieferling/internal/install"
+	"github.com/pklaschka/lieferling/internal/store"
 	"github.com/pklaschka/lieferling/internal/verify"
 )
 
@@ -72,6 +73,27 @@ func TestPolicyCommand(t *testing.T) {
 	if err := run(ctx, s, []string{"policy", "a/b", "c", "d"}, &out); !errors.Is(err, errUsage) {
 		t.Errorf("three words: %v", err)
 	}
+	// a bad workflow changes nothing, not even the policy given with it
+	if err := run(ctx, s, []string{"policy", "codeberg.org/me/werk", "strict", "--workflow", "release.yml"}, &out); err == nil {
+		t.Error("pin off GitHub accepted")
+	}
+	if p, _ := s.Policies(); policyOf(p, "codeberg.org/me/werk").Policy != "standard" {
+		t.Error("the policy was written although the workflow was refused")
+	}
+	for _, args := range [][]string{{"add", "x/y", "--workflow", "a.yml"}, {"verify", "me/demo", "--accept-digest", "sha256:" + strings.Repeat("a", 64)}, {"install", "me/demo", "--json"}} {
+		if err := run(ctx, s, args, &out); !errors.Is(err, errUsage) {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+}
+
+func policyOf(p store.Policies, repo string) store.AppPolicy {
+	for _, a := range p.Apps {
+		if a.Repo == repo {
+			return a
+		}
+	}
+	return store.AppPolicy{}
 }
 
 func TestVerifyCommand(t *testing.T) {

@@ -159,6 +159,7 @@ func TestDecide(t *testing.T) {
 		{"strict with both", Strict, []Check{pass(CheckChecksums), pass(CheckAttestation), pass(CheckSynced)}, Cleared, nil},
 		{"digest fail beats sender", Standard, []Check{fail(CheckSynced), fail(CheckSender)}, Held, nil},
 		{"a workflow pin holds", Standard, []Check{pass(CheckForgeDigest), {ID: CheckPolicy, Result: Fail, Code: "workflow_required"}}, Held, nil},
+		{"an accepted digest alone stays unchecked", Standard, []Check{skip(CheckForgeDigest), {ID: CheckSynced, Result: Pass, Code: "accepted"}}, Unchecked, nil},
 		{"a signature pass alone stays unchecked", Standard, []Check{skip(CheckForgeDigest), pass("signature")}, Unchecked, nil},
 	} {
 		v, checks := Decide(c.p, append([]Check(nil), c.checks...))

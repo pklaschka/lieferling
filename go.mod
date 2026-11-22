@@ -3,7 +3,9 @@ module github.com/pklaschka/lieferling
 go 1.27.0
 
 require (
+	github.com/golang/snappy v1.0.0
 	github.com/sigstore/sigstore-go v1.4.0
+	github.com/theupdateframework/go-tuf/v2 v2.4.2
 	github.com/wailsapp/wails/v3 v3.1.0
 	golang.org/x/mod v0.43.0
 )
@@ -42,7 +44,6 @@ require (
 	github.com/go-openapi/validate v1.0.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
-	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/certificate-transparency-go v1.4.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -59,7 +60,6 @@ require (
 	github.com/sigstore/rekor-tiles/v2 v2.4.0 // indirect
 	github.com/sigstore/sigstore v1.11.1 // indirect
 	github.com/sigstore/timestamp-authority/v2 v2.2.0 // indirect
-	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect

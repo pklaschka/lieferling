@@ -125,6 +125,16 @@ func (s *Store) Verify(ctx context.Context, repo string, o VerifyOptions, progre
 		force = verify.Strict
 	}
 
+	cfg, err := config.Load(s.ConfigPath)
+	if err != nil {
+		return verify.Report{}, err
+	}
+	if force == "" && verify.Resolve(cfg.Verify, app.Verify) == verify.Off {
+		rep := verify.Report{Policy: verify.Off, Verdict: verify.Exempt, CheckedAt: time.Now()}
+		verify.Localize(&rep, verify.English)
+		return rep, nil // nothing to download for a check that is switched off
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

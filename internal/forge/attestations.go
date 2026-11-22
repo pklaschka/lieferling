@@ -54,6 +54,7 @@ func (c *GitHub) Attestations(ctx context.Context, repo, digest string) ([][]byt
 		return nil, fmt.Errorf("%s: reading attestations: %w", repo, err)
 	}
 	var bundles [][]byte
+	var failed error
 	for _, a := range list.Attestations {
 		if b := bytes.TrimSpace(a.Bundle); len(b) > 0 && !bytes.Equal(b, []byte("null")) {
 			bundles = append(bundles, b)
@@ -65,9 +66,13 @@ func (c *GitHub) Attestations(ctx context.Context, repo, digest string) ([][]byt
 		}
 		b, err := c.fetchBundle(ctx, a.BundleURL)
 		if err != nil {
-			return nil, fmt.Errorf("%s: attestation bundle: %w", repo, err)
+			failed = err
+			continue
 		}
 		bundles = append(bundles, b)
+	}
+	if len(bundles) == 0 && failed != nil {
+		return nil, fmt.Errorf("%s: attestation bundle: %w", repo, failed)
 	}
 	return bundles, nil
 }

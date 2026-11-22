@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
@@ -62,8 +63,9 @@ type Verifier struct {
 	// CacheDir holds the TUF metadata; "" disables the local cache.
 	CacheDir string
 
-	mu    sync.Mutex
-	roots map[string]root.TrustedMaterial // by issuer organization; preset in tests
+	mu     sync.Mutex
+	roots  map[string]root.TrustedMaterial // by issuer organization; preset in tests
+	loaded map[string]time.Time            // when each root was loaded
 }
 
 // New returns a Verifier that keeps its trust roots in cacheDir.

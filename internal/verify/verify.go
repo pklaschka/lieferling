@@ -230,6 +230,8 @@ func Decide(p Policy, checks []Check) (Verdict, []Check) {
 			published, anyPass = true, true
 		case c.ID == CheckAttestation:
 			attested, anyPass = true, true
+		case c.Code == "accepted" && c.ID == CheckSynced:
+			// the user's own acceptance compares nothing
 		case strings.HasPrefix(c.ID, "digest.") || c.ID == CheckSender:
 			anyPass = true
 		}

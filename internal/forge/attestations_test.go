@@ -45,6 +45,13 @@ func TestAttestations(t *testing.T) {
 			}
 			w.Write([]byte(`{"attestations":[{"bundle":null,"bundle_url":"` + srv.URL + `/bundles/1"}]}`))
 		}, []string{`{"b":2}`}, false},
+		{"a failed bundle_url keeps the inline bundle", func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/bundles/") {
+				http.Error(w, "gone", http.StatusGone)
+				return
+			}
+			w.Write([]byte(`{"attestations":[{"bundle_url":"` + srv.URL + `/bundles/1"},{"bundle":{"c":3}}]}`))
+		}, []string{`{"c":3}`}, false},
 		{"403 is an error", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope", http.StatusForbidden) }, nil, true},
 	} {
 		calls, answer = nil, c.answer
